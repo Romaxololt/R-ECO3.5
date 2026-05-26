@@ -1,0 +1,351 @@
+"""
+banana.py — RAVEN UI module
+"""
+
+import rich
+import rich.console
+from rich.prompt import Prompt, Confirm
+from rich.panel import Panel
+from rich.text import Text
+from rich.align import Align
+from rich import box as rich_box
+import questionary
+from questionary import Style as QStyle
+import threading
+import time
+import itertools
+
+# ─── État interne ─────────────────────────────────────────────────────────────
+
+_state: dict = {"console": None, "log_fn": None}
+
+RAVEN_BANNER = r"""
+██████╗  █████╗ ██╗   ██╗███████╗███╗   ██╗
+██╔══██╗██╔══██╗██║   ██║██╔════╝████╗  ██║
+██████╔╝███████║██║   ██║█████╗  ██╔██╗ ██║
+██╔══██╗██╔══██║╚██╗ ██╔╝██╔══╝  ██║╚██╗██║
+██║  ██║██║  ██║ ╚████╔╝ ███████╗██║ ╚████║
+╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═══╝
+"""
+
+RAVEN_STYLE = QStyle([
+    ("qmark",       "fg:#5b8def bold"),
+    ("question",    "fg:#cdd6f4 bold"),
+    ("answer",      "fg:#89b4fa bold"),
+    ("pointer",     "fg:#89dceb bold"),
+    ("highlighted", "fg:#89dceb bold"),
+    ("selected",    "fg:#a6e3a1"),
+    ("separator",   "fg:#6c7086"),
+    ("instruction", "fg:#6c7086 italic"),
+    ("text",        "fg:#cdd6f4"),
+])
+
+BOX_STYLES = {
+    "ROUNDED":  rich_box.ROUNDED,
+    "HEAVY":    rich_box.HEAVY,
+    "DOUBLE":   rich_box.DOUBLE,
+    "SIMPLE":   rich_box.SIMPLE,
+    "MINIMAL":  rich_box.MINIMAL,
+    "ASCII":    rich_box.ASCII,
+    "SQUARE":   rich_box.SQUARE,
+    "MARKDOWN": rich_box.MARKDOWN,
+}
+
+# ─── Console ──────────────────────────────────────────────────────────────────
+
+def _console() -> rich.console.Console:
+    if _state["console"] is None:
+        _state["console"] = rich.console.Console()
+    return _state["console"]
+
+def set_log_fn(fn):
+    _state["log_fn"] = fn
+
+# ─── Helpers publics ──────────────────────────────────────────────────────────
+# Tout passe par _console().print() directement — plus de StringIO
+
+def null(*args, **kwargs):
+    pass
+
+def print(msg: str = "", **kwargs):
+    _console().print(Text.from_markup(str(msg)), **kwargs)
+
+def err(msg: str):
+    _console().print(Text.from_markup(f"[bold red]  ✗ {msg}"))
+
+def ok(msg: str):
+    _console().print(Text.from_markup(f"[bold green]  ✓ {msg}"))
+
+def rule(text: str = "", style: str = "blue dim"):
+    print("")
+    _console().rule(text, style=style)
+
+def banner():
+    c = _console()
+    c.print()
+    c.print(Align.center(Text(RAVEN_BANNER, style="bold blue", justify="center")))
+    c.print(Align.center(Text("New layer exploitation system & research engine", style="dim cyan", justify="center")))
+    c.print(Align.center(Text("v1.1  ·  R-ECO3", style="dim", justify="center")))
+    c.print()
+    c.rule(style="blue dim")
+    c.print()
+
+def panel(
+    content: str,
+    title: str = "",
+    border: str = "blue",
+    padding=(1, 2),
+    align: str = "left",
+    width: int | None = None,
+    subtitle: str = "",
+    box_style: str = "ROUNDED",
+):
+    body = Text.from_markup(content)
+    p = Panel(
+        Align(body, align=align) if align in ("center", "right") else body,
+        title=Text.from_markup(title) if title else None,
+        subtitle=Text.from_markup(subtitle) if subtitle else None,
+        border_style=border,
+        box=BOX_STYLES.get(box_style.upper(), rich_box.ROUNDED),
+        padding=padding,
+        width=width,
+        expand=width is None,
+    )
+    _console().print(Align.center(p) if align == "center" and width else p)
+
+# ─── Entrées interactives ─────────────────────────────────────────────────────
+
+def ask(text: str, default=None, cant_none: bool = True, password: bool = False) -> str | None:
+    try:
+        res = Prompt.ask(text, default=default, console=_console(), password=password)
+        if cant_none and (res is None or res.strip() == ""):
+            err("This field cannot be empty.")
+            return ask(text, default=default, cant_none=cant_none, password=password)
+        return res
+    except KeyboardInterrupt:
+        return None
+
+def input(text: str, default: str = "") -> str | None:
+    try:
+        _console().print()
+        result = questionary.text(text, default=default, style=RAVEN_STYLE, qmark="›").ask()
+        _console().print()
+        return result
+    except KeyboardInterrupt:
+        return None
+
+def question(text: str, choices: list[str] | None = None, default=None, multi: bool = False) -> str | list[str] | None:
+    if not choices:
+        return input(text, default=default or "")
+    if multi:
+        return checkbox(text, choices)
+    return select(text, choices)
+
+def confirm(text: str, default: bool = False) -> bool:
+    try:
+        return Confirm.ask(text, console=_console(), default=default)
+    except (KeyboardInterrupt, Exception):
+        return False
+
+def select(text: str, choices: list[str]) -> str | None:
+    try:
+        _console().print()
+        result = questionary.select(text, choices=choices, style=RAVEN_STYLE, qmark="›", pointer="❯").ask()
+        _console().print()
+        return result
+    except KeyboardInterrupt:
+        return None
+
+def checkbox(text: str, choices: list[str]) -> list[str]:
+    try:
+        _console().print()
+        result = questionary.checkbox(text, choices=choices, style=RAVEN_STYLE, qmark="›", pointer="❯").ask()
+        _console().print()
+        return result or []
+    except KeyboardInterrupt:
+        return []
+
+# ─── Loader ───────────────────────────────────────────────────────────────────
+
+class Loader:
+    FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def __init__(self, msg: str = "Loading…", delay: float = 0.08):
+        self.msg   = msg
+        self.delay = delay
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _spin(self):
+        for frame in itertools.cycle(self.FRAMES):
+            if self._stop.is_set():
+                break
+            _console().print(Text.from_markup(f"\r[bold cyan]{frame}[/bold cyan] [dim]{self.msg}[/dim]"), end="")
+            time.sleep(self.delay)
+
+    def start(self) -> "Loader":
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self, final_msg: str = ""):
+        self._stop.set()
+        if self._thread:
+            self._thread.join()
+        _console().print("\r" + " " * (len(self.msg) + 6) + "\r", end="")
+        if final_msg:
+            _console().print(Text.from_markup(final_msg))
+
+    def __enter__(self) -> "Loader":
+        return self.start()
+
+    def __exit__(self, *_):
+        self.stop()
+
+_loader_instance: Loader | None = None
+
+def loader(msg: str = "Loading…", seconds: float | None = None) -> Loader:
+    l = Loader(msg)
+    l.start()
+    if seconds is not None:
+        def _auto_stop():
+            time.sleep(seconds)
+            l.stop()
+        threading.Thread(target=_auto_stop, daemon=True).start()
+    return l
+
+# ─── R_ECO3 API ───────────────────────────────────────────────────────────────
+
+def R_ECO3(args: str, log_fn=null):
+    global _loader_instance
+
+    set_log_fn(log_fn)
+
+    try:
+        import core
+        pos, kv = core.utils.parse_command(str(args))
+    except Exception as e:
+        err(f"[banana] parse error: {e}")
+        return 1, None
+
+    if not pos:
+        return 0, None
+
+    cmd = pos[0]
+
+    if cmd == "banner":
+        banner()
+        return 0, None
+
+    if cmd == "err":
+        err(str(kv.get("msg", " ".join(pos[1:]))))
+        return 0, None
+
+    if cmd == "ok":
+        ok(str(kv.get("msg", " ".join(pos[1:]))))
+        return 0, None
+
+    if cmd == "print":
+        print(str(kv.get("msg", " ".join(pos[1:]))))
+        return 0, None
+
+    if cmd == "rule":
+        rule(str(kv.get("text", " ".join(pos[1:]))), style=str(kv.get("style", "blue dim")))
+        return 0, None
+
+    if cmd == "panel":
+        panel(
+            content   = kv.get("msg",      " ".join(pos[1:])),  # type: ignore
+            title     = kv.get("title",    ""),                 # type: ignore
+            border    = kv.get("border",   "blue"),             # type: ignore
+            align     = kv.get("align",    "left"),             # type: ignore
+            subtitle  = kv.get("subtitle", ""),                 # type: ignore
+            box_style = kv.get("box",      "ROUNDED"),          # type: ignore
+            width     = int(kv["width"]) if kv.get("width") else None,
+        )
+        return 0, None
+
+    if cmd == "input":
+        result = input(str(kv.get("msg", " ".join(pos[1:]))), default=str(kv.get("default", "")))
+        return 0, result
+
+    if cmd == "question":
+        raw_ch  = kv.get("choices", "")
+        choices = [c.strip() for c in raw_ch.split(",") if c.strip()] if raw_ch else None   # type: ignore
+        multi   = kv.get("multi", "false").lower() in ("1", "true", "yes")                  # type: ignore
+        result  = question(str(kv.get("msg", " ".join(pos[1:]))), choices=choices, default=kv.get("default"), multi=multi)
+        return 0, result
+
+    if cmd == "loader":
+        sub = pos[1] if len(pos) > 1 else ""
+        msg = kv.get("msg", "Loading…")
+
+        if sub == "start":
+            if _loader_instance is not None:
+                _loader_instance.stop()
+            _loader_instance = Loader(str(msg))
+            _loader_instance.start()
+            return 0, None
+
+        if sub == "stop":
+            if _loader_instance is not None:
+                final = str(msg) if msg != "Loading…" else ""
+                _loader_instance.stop(final_msg=final)
+                _loader_instance = None
+            return 0, None
+
+        raw_time = kv.get("time", None)
+        if raw_time is not None:
+            try:
+                loader(str(msg), seconds=float(raw_time))
+                return 0, None
+            except ValueError:
+                err(f"loader: valeur --time invalide '{raw_time}'")
+                return 1, None
+
+        err("loader: usage → loader start|stop --msg=X  ou  loader --msg=X --time=N")
+        return 1, None
+
+    err(f"[banana] unknown command: '{cmd}'")
+    return 1, None
+
+def R_ECO3dep():
+    """Retourne les dépendances minimales de la version système actuelle."""
+    return (("3.5.1b",), (("core.utils", ("1.1",)),),)
+
+def R_ECO3inf():
+    return {
+        "name": "banana",
+        "desc": "Banana RAVEN UI — display and interactions via Rich/Questionary",
+        "help": "Graphical and interactive user interface module for RAVEN, designed to manage rich text displays, structured panels, animated loaders, and stylized user prompts.",
+        "version_mod": "1.1",
+        "L2Module": True,
+        "manual": (
+            "banana [command]\n\n"
+            "AVAILABLE COMMANDS & ARGUMENTS:\n"
+            "  banner\n"
+            "    Displays the RAVEN system welcome banner.\n\n"
+            "  print [pos] [--msg=X]\n"
+            "    Prints text with Rich formatting. Uses '--msg' or positional text.\n\n"
+            "  ok [pos] [--msg=X]\n"
+            "    Prints a success message prefixed with a green checkmark.\n\n"
+            "  err [pos] [--msg=X]\n"
+            "    Prints an error message prefixed with a red cross.\n\n"
+            "  rule [pos] [--text=X] [--style=S]\n"
+            "    Draws a horizontal separator line. Style defaults to 'blue dim'.\n\n"
+            "  panel [pos] [--msg=X] [--title=T] [--subtitle=S] [--border=B] [--align=left|center|right] [--box=B_STYLE] [--width=N]\n"
+            "    Displays a framed information panel.\n"
+            "    Box styles: ROUNDED, HEAVY, DOUBLE, SIMPLE, MINIMAL, ASCII, SQUARE, MARKDOWN.\n\n"
+            "  input [pos] [--msg=X] [--default=D]\n"
+            "    Prompts the user for a simple text input with an optional default value.\n\n"
+            "  question [pos] [--msg=X] [--choices=a,b,c] [--multi=true|false] [--default=D]\n"
+            "    Prompts the user with a multiple-choice selection or a checkbox list if '--multi' is enabled.\n\n"
+            "  loader start [--msg=X]\n"
+            "    Starts a persistent, asynchronous animated loading spinner.\n\n"
+            "  loader stop [--msg=X]\n"
+            "    Stops the active loading spinner and prints an optional final message.\n\n"
+            "  loader [--msg=X] [--time=N]\n"
+            "    Runs an animated loading spinner that automatically exits after N seconds."
+        )
+    }
