@@ -40,35 +40,21 @@ def _remote_path(filename: str) -> str:
     return "modules/" + filename
 
 
-def _api_request(method: str, path: str, token: str, payload=None, log_fn=print):
-    """
-    Effectue une requête sur l'API GitHub via vine.
-    Retourne (0, dict_réponse) en succès ou (1, message_erreur) en erreur.
-
-    Fix v1.1 : les headers sont encadrés de guillemets simples pour que
-    tokenize() de core.utils ne découpe pas "Bearer <token>" en deux tokens.
-    Le double-appel vine (silent + non-silent) est supprimé.
-    """
+def _api_request(method, path, token, payload=None, log_fn=print):
     import core.apix as apix
     import json
 
     url = f"{_API_BASE}{path}"
-
-    # On encadre chaque valeur de header entre guillemets simples.
-    # L'espace dans "Bearer ghp_xxx" était la cause du 401 :
-    # tokenize() coupait "Bearer" et le token en deux tokens distincts,
-    # vine recevait donc --header=Authorization:Bearer sans la valeur.
     vine_args = (
         f"'{url}'"
         f" --method={method}"
         f" --header='Authorization: token {token}'"
         f" --header='Accept: application/vnd.github+json'"
         f" --header='X-GitHub-Api-Version: 2022-11-28'"
+        f" --no-status"   # ← supprime les lignes ✓/✗ et Status
     )
 
     if payload is not None:
-        # json.dumps produit du JSON valide ; on l'encadre en guillemets simples
-        # pour éviter tout conflit avec les guillemets doubles internes du JSON.
         body = json.dumps(payload)
         vine_args += f" --data='{body}'"
 
@@ -79,12 +65,17 @@ def _api_request(method: str, path: str, token: str, payload=None, log_fn=print)
     apix.R_ECO3(f"run vine {vine_args}", log_fn=_capture)
     raw = "\n".join(lines)
 
-    try:
-        data = json.loads(raw)
-        return 0, data
-    except Exception:
-        return 1, raw
+    # Extraire le premier bloc JSON valide
+    for i, line in enumerate(lines):
+        if line.strip().startswith("{") or line.strip().startswith("["):
+            candidate = "\n".join(lines[i:])
+            try:
+                data = json.loads(candidate)
+                return 0, data
+            except json.JSONDecodeError:
+                pass
 
+    return 1, raw
 
 def _get_file_sha(remote_path: str, token: str, log_fn) -> str:
     path = f"/repos/{_REPO_OWNER}/{_REPO_NAME}/contents/{remote_path}?ref={_BRANCH}"
