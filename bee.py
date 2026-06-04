@@ -3,17 +3,14 @@ import time
 
 SEP = "<RECO_SEP:=:>"
 
-
 def _get_entries(db) -> list[str]:
     raw = db.get("§sys:bee:available.all", None)
     if not raw:
         return []
     return [e for e in str(raw).split(SEP) if e]
 
-
 def _set_entries(db, entries: list[str]):
     db["§sys:bee:available.all"] = SEP.join(entries)
-
 
 def _ensure_in_available(db, captor: str):
     entries = _get_entries(db)
@@ -50,10 +47,6 @@ def R_ECO3(args, log_fn=print):
 
     def B(cmd):
         return core.apix.R_ECO3(f"run banana {cmd}", log_fn)
-
-    if not pos:
-        B("panel --msg='bee <set|execute|list|delete|show|add|available|stat>' --title=' Bee' --border=cyan --box=ROUNDED")
-        return 1
 
     verb = pos[0]
 
@@ -237,7 +230,6 @@ def R_ECO3(args, log_fn=print):
 
     return 0
 
-
 def R_ECO3dep():
     return (
         ("3.5.1b",),
@@ -259,6 +251,7 @@ def R_ECO3inf():
         "help":        "Associates named captors with module commands and executes them on demand. Tracks execution history and exposes a named-entry registry with per-entry statistics.",
         "version_mod": "1.2",
         "L2Module":    True,
+        "alias_rules": "bee /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "manual": (
             "bee <command> [args]\n\n"
             "AVAILABLE COMMANDS & ARGUMENTS:\n"
