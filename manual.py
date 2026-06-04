@@ -72,6 +72,7 @@ def R_ECO3inf():
         "desc":        "Display the full manual for a RAVEN module",
         "help":        "Fetches and renders the manual entry of any module via spider. Falls back to the help field if no manual is defined.",
         "version_mod": "1.0",
+        "alias_rules": "manual /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "L2Module":    True,
         "manual": (
             "manual <module>\n\n"
