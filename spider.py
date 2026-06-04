@@ -11,12 +11,12 @@ def R_ECO3(args: str, log_fn=print):
 
     positional, kv = core.utils.parse_command(args)
 
-    verify_flag  = kv.get("v") is True or kv.get("verify") is True
-    dep_flag     = kv.get("d") is True or kv.get("dep")    is True
-    info_flag    = kv.get("i") is True or kv.get("info")   is True
-    run_flag     = kv.get("r") is True or kv.get("run")    is True
-    debug_flag   = kv.get("g") is True or kv.get("debug")  is True
-    no_print_flag = kv.get("n") is True or kv.get("no-print") is True
+    verify_flag  = kv.get("v") is True or kv.get("verify")      is True
+    dep_flag     = kv.get("d") is True or kv.get("dep")         is True
+    info_flag    = kv.get("i") is True or kv.get("info")        is True
+    run_flag     = kv.get("r") is True or kv.get("run")         is True
+    debug_flag   = kv.get("g") is True or kv.get("debug")       is True
+    no_print_flag = kv.get("n") is True or kv.get("no-print")   is True
     l2verif_flag = kv.get("only-l2", False)
     run_args     = kv.get("args", "")
 
@@ -33,7 +33,7 @@ def R_ECO3(args: str, log_fn=print):
             log_fn(msg)
 
     # ── Aide ───────────────────────────────────────────────────────
-    if kv.get("h") is True or not positional:
+    if kv.get("h") is True:
         _log("Usage : spider <module> [-v] [-d] [-i] [-r] [--args=\"...\"] [-n] [-h]")
         _log("")
         _log("  <module>            Nom du module à inspecter")
@@ -242,6 +242,7 @@ def R_ECO3inf():
         "help":        "Inspects any RAVEN module: recursively verifies dependency tree, displays metadata and dep tuples, and optionally launches the module. Supports silent mode for programmatic use.",
         "version_mod": "1.8",
         "L2Module":    True,
+        "alias_rules": "spider /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "manual": (
             "spider <module> [flags] [--args=\"...\"]\n\n"
             "AVAILABLE FLAGS:\n"
