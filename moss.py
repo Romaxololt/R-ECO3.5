@@ -174,6 +174,7 @@ def R_ECO3inf():
         "help":        "Renders a styled terminal prompt and returns the user's input. Style, folder, user, and host are all configurable.",
         "version_mod": "1.1",
         "L2Module":    True,
+        "alias_rules": "banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "manual": (
             "moss [--style=STYLE] [--folder=DIR] [--user=NAME] [--host=HOST]\n\n"
             "AVAILABLE COMMANDS & ARGUMENTS:\n"
