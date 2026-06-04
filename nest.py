@@ -8,7 +8,6 @@ def _lister_fichiers(dossier) -> list[str]:
         if os.path.isfile(os.path.join(dossier, f))
     ]
 
-
 def _wait_for_cancel(timeout: float, log_fn) -> bool:
     """
     Affiche un compte à rebours et retourne True si l'utilisateur annule.
@@ -41,7 +40,6 @@ def _wait_for_cancel(timeout: float, log_fn) -> bool:
     print()
     return False
 
-
 def R_ECO3(args, log_fn=print):
 
     ROOT = Path(__file__).resolve().parent.parent
@@ -58,6 +56,12 @@ def R_ECO3(args, log_fn=print):
 
     db = core.hive.HiveFS(str(core.trail.DB_FILE))
 
+    debug = db.get("§sys:nest:debug", "False") == "True"
+    
+    if debug:
+        log_fn("[NEST] Procédure d'initialisation en cours...")
+        log_fn("[NEST] Core modules OK.")
+    
     # Pré-vérification des clés obligatoires
     required_keys = ("version", "reco_magic", "reco_version", "reco_codename")
     if any(k not in db for k in required_keys):
@@ -75,9 +79,9 @@ def R_ECO3(args, log_fn=print):
     if db["reco_codename"] != "Ant":
         log_fn("[NEST] Codename incompatible. (errno: 7)")
         return
-
-    # debug résolu avant le if/else pour être disponible partout
-    debug = db.get("§sys:nest:debug", "False") == "True"
+    
+    if debug:
+        log_fn("[NEST] Base de données OK.")
 
     if "§sys:nest:status" not in db or "§sys:global:boot:bmodule" not in db:
         db.set("§sys:nest:status", "1")
@@ -89,8 +93,12 @@ def R_ECO3(args, log_fn=print):
             if "raven.py" in files:
                 db.set("§sys:global:boot:bmodule", "raven.py")
             else:
-                log_fn("[NEST] raven.py introuvable. (errno: 2)")
+                log_fn("[NEST] raven.py (default boot module) introuvable, veuillez l'ajouter via _start : set §sys:global:boot:bmodule <module>. (errno: 2)")
                 return
+            
+        if "spider.py" not in files:
+            log_fn("[NEST] spider.py introuvable, veuillez l'ajouter via _start : set §sys:global:boot:bmodule spider.py. (errno: 13)")
+            return
 
         bmodule = db["§sys:global:boot:bmodule"]
         log_fn(f"[NEST] Module de démarrage : {bmodule}")
@@ -107,6 +115,7 @@ def R_ECO3(args, log_fn=print):
         bmodule = db["§sys:global:boot:bmodule"]
         if debug:
             log_fn(f"[NEST] Module : {bmodule}")
+            
             
     if debug: log_fn("[NEST] Vérification Bmodule.dep")
     if core.apix.R_ECO3("run spider raven -v" + (" -g" if debug else ""), log_fn)[1] != 0:
@@ -143,7 +152,7 @@ def R_ECO3inf():
         "desc":        "Bootloader for R-ECOSYSTEM — validates environment and launches the main module",
         "help":        "Checks database integrity, resolves the boot module, and launches it after a cancellable countdown. No arguments required.",
         "version_mod": "1.1",
-        "L2Module":    True,
+        "L2Module":    False,
         "manual": (
             "nest\n\n"
             "AVAILABLE COMMANDS & ARGUMENTS:\n"
@@ -169,6 +178,7 @@ def R_ECO3inf():
             "  errno 10 — missing core modules (corrupted ecosystem)\n"
             "  errno 11 — boot module dependency check failed\n"
             "  errno 12 — boot module execution error\n"
+            "  errno 13 — spider module not found\n"
             "  warno 4  — unexpected database version (non-fatal)\n"
         )
     }
