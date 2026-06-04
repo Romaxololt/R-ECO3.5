@@ -13,6 +13,7 @@ def R_ECO3inf():
         "desc": "Echo — prints all provided arguments back to log output",
         "help": "Prints all provided positional arguments and key-value parameters back to the log output.",
         "version_mod": "1.1",
+        "alias_rules": "test /* = echo test",
         "L2Module": True,
         "manual": (
             "echo [args]\n\n"
