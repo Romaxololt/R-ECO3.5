@@ -17,7 +17,7 @@ import itertools
 
 # ─── État interne ─────────────────────────────────────────────────────────────
 
-_state: dict = {"console": None, "log_fn": None}
+_state: dict = {"console": None, "log_fn": None, "bird": None}
 
 RAVEN_BANNER = r"""
 ██████╗  █████╗ ██╗   ██╗███████╗███╗   ██╗
@@ -51,7 +51,7 @@ BOX_STYLES = {
     "MARKDOWN": rich_box.MARKDOWN,
 }
 
-# ─── Console ──────────────────────────────────────────────────────────────────
+# ─── Console Rich (utilisée uniquement pour les widgets Rich : Panel, banner) ─
 
 def _console() -> rich.console.Console:
     if _state["console"] is None:
@@ -61,26 +61,61 @@ def _console() -> rich.console.Console:
 def set_log_fn(fn):
     _state["log_fn"] = fn
 
+# ─── Résolution de bird ───────────────────────────────────────────────────────
+
+def _bird():
+    """
+    Retourne la fonction bird. Tente de la charger via apix si elle n'est
+    pas encore en cache. Si apix est indisponible, retombe sur un print
+    basique de façon silencieuse.
+    """
+    if _state["bird"] is not None:
+        return _state["bird"]
+    try:
+        import core.apix as apix
+        code, fn = apix.R_ECO3("run bird")[1] #type: ignore
+        if code == 0 and callable(fn):
+            _state["bird"] = fn
+            return fn
+    except Exception:
+        pass
+    # Fallback : print natif sans markup (bird indisponible)
+    import builtins
+    _state["bird"] = builtins.print
+    return _state["bird"]
+
 # ─── Helpers publics ──────────────────────────────────────────────────────────
-# Tout passe par _console().print() directement — plus de StringIO
+# print / ok / err / rule délèguent à bird.
+# panel / banner continuent d'utiliser Rich directement (widgets non couverts
+# par bird).
 
 def null(*args, **kwargs):
     pass
 
 def print(msg: str = "", **kwargs):
-    _console().print(Text.from_markup(str(msg)), **kwargs)
+    """Affiche un message avec markup via bird."""
+    _bird()(str(msg))
 
 def err(msg: str):
-    _console().print(Text.from_markup(f"[bold red]  ✗ {msg}"))
+    """Affiche un message d'erreur (croix rouge) via bird."""
+    _bird()(f"[bold red]  ✗ {msg}[/]")
 
 def ok(msg: str):
-    _console().print(Text.from_markup(f"[bold green]  ✓ {msg}"))
+    """Affiche un message de succès (coche verte) via bird."""
+    _bird()(f"[bold green]  ✓ {msg}[/]")
 
 def rule(text: str = "", style: str = "blue dim"):
-    print("")
-    _console().rule(text, style=style)
+    """Dessine un séparateur horizontal via bird.rule."""
+    b = _bird()
+    b("")
+    if hasattr(b, "rule"):
+        b.rule(title=text, style=style) #type: ignore
+    else:
+        # Fallback si bird.rule absent
+        _console().rule(text, style=style)
 
 def banner():
+    """Affiche la bannière RAVEN. Utilise Rich pour le rendu centré/aligné."""
     c = _console()
     c.print()
     c.print(Align.center(Text(RAVEN_BANNER, style="bold blue", justify="center")))
@@ -100,6 +135,7 @@ def panel(
     subtitle: str = "",
     box_style: str = "ROUNDED",
 ):
+    """Affiche un panel encadré. Utilise Rich (bird ne couvre pas Panel)."""
     body = Text.from_markup(content)
     p = Panel(
         Align(body, align=align) if align in ("center", "right") else body,
@@ -177,10 +213,11 @@ class Loader:
         self._thread: threading.Thread | None = None
 
     def _spin(self):
+        b = _bird()
         for frame in itertools.cycle(self.FRAMES):
             if self._stop.is_set():
                 break
-            _console().print(Text.from_markup(f"\r[bold cyan]{frame}[/bold cyan] [dim]{self.msg}[/dim]"), end="")
+            b(f"\r[bold cyan]{frame}[/] [dim]{self.msg}[/]", end="")
             time.sleep(self.delay)
 
     def start(self) -> "Loader":
@@ -193,9 +230,10 @@ class Loader:
         self._stop.set()
         if self._thread:
             self._thread.join()
-        _console().print("\r" + " " * (len(self.msg) + 6) + "\r", end="")
+        b = _bird()
+        b("\r" + " " * (len(self.msg) + 6) + "\r", end="")
         if final_msg:
-            _console().print(Text.from_markup(final_msg))
+            b(final_msg)
 
     def __enter__(self) -> "Loader":
         return self.start()
@@ -312,7 +350,13 @@ def R_ECO3(args: str, log_fn=null):
 
 def R_ECO3dep():
     """Retourne les dépendances minimales de la version système actuelle."""
-    return (("3.5.1b",), (("core.utils", ("1.1",)),),)
+    return (
+        ("3.5.1b",),
+        (
+            ("core.utils", ("1.1",)),
+            ("bird",       ("1.2",)),   # bird requis pour l'affichage texte
+        ),
+    )
 
 def R_ECO3inf():
     return {
@@ -320,6 +364,7 @@ def R_ECO3inf():
         "desc": "Banana RAVEN UI — display and interactions via Rich/Questionary",
         "help": "Graphical and interactive user interface module for RAVEN, designed to manage rich text displays, structured panels, animated loaders, and stylized user prompts.",
         "version_mod": "1.1",
+        "alias_rules": "banana /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "L2Module": True,
         "manual": (
             "banana [command]\n\n"
@@ -327,22 +372,22 @@ def R_ECO3inf():
             "  banner\n"
             "    Displays the RAVEN system welcome banner.\n\n"
             "  print [pos] [--msg=X]\n"
-            "    Prints text with Rich formatting. Uses '--msg' or positional text.\n\n"
+            "    Prints text with markup via bird. Uses '--msg' or positional text.\n\n"
             "  ok [pos] [--msg=X]\n"
-            "    Prints a success message prefixed with a green checkmark.\n\n"
+            "    Prints a success message prefixed with a green checkmark (via bird).\n\n"
             "  err [pos] [--msg=X]\n"
-            "    Prints an error message prefixed with a red cross.\n\n"
+            "    Prints an error message prefixed with a red cross (via bird).\n\n"
             "  rule [pos] [--text=X] [--style=S]\n"
-            "    Draws a horizontal separator line. Style defaults to 'blue dim'.\n\n"
+            "    Draws a horizontal separator line via bird.rule. Style defaults to 'blue dim'.\n\n"
             "  panel [pos] [--msg=X] [--title=T] [--subtitle=S] [--border=B] [--align=left|center|right] [--box=B_STYLE] [--width=N]\n"
-            "    Displays a framed information panel.\n"
+            "    Displays a framed information panel (Rich Panel — bird not used here).\n"
             "    Box styles: ROUNDED, HEAVY, DOUBLE, SIMPLE, MINIMAL, ASCII, SQUARE, MARKDOWN.\n\n"
             "  input [pos] [--msg=X] [--default=D]\n"
             "    Prompts the user for a simple text input with an optional default value.\n\n"
             "  question [pos] [--msg=X] [--choices=a,b,c] [--multi=true|false] [--default=D]\n"
             "    Prompts the user with a multiple-choice selection or a checkbox list if '--multi' is enabled.\n\n"
             "  loader start [--msg=X]\n"
-            "    Starts a persistent, asynchronous animated loading spinner.\n\n"
+            "    Starts a persistent, asynchronous animated loading spinner (via bird).\n\n"
             "  loader stop [--msg=X]\n"
             "    Stops the active loading spinner and prints an optional final message.\n\n"
             "  loader [--msg=X] [--time=N]\n"
