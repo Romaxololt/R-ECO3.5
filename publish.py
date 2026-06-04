@@ -427,7 +427,7 @@ def R_ECO3dep() -> tuple:
             ("core.hive",   ("1.1",)),
             ("core.apix",   ("1.1",)),
             ("core.trail",  ("1.1",)),
-            ("vine",        ("1.0",)),
+            ("vine",        ("1.1",)),
         )
     )
 
@@ -443,6 +443,7 @@ def R_ECO3inf() -> dict:
             "publish list         Liste les fichiers présents sur le dépôt\n"
             "publish token ...    Gère le token GitHub (set / show / del)"
         ),
+        "alias_rules": "publish /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "version_mod": _VERSION,
         "L2Module":    True,
         "manual":      _MANUAL_TEXT,
