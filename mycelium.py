@@ -1,88 +1,102 @@
 """
 mycelium.py — R-ECOSYSTEM module mycelium & command dispatcher
-Version : 1.1
-Codename: Ant
+Version : 1.3
+Codename: Fungus
 
 Responsibilities
 ----------------
 1. Scan MODULES_DIR for every .py file that declares L2Module=True in R_ECO3inf().
    mycelium itself is included so that "mycelium help", "mycelium set", etc. are routable.
-2. For each discovered L2 module check §sys:mycelium:<module_stem> in HiveFS.
-   If the key exists its value is a "|||"-separated list of alias rules.
-   Each rule has the form:
-       keyword * = args /*          (passes caller args verbatim to module)
-       keyword    = args            (fixed args, no caller args forwarded)
-   Syntax summary:
-       •  "keyword *"  on the left  → the keyword accepts extra args
-       •  "/*"         on the right → append caller args at that position
-       •  "*" alone on left as keyword matches anything (catch-all)
-   Examples stored in HiveFS:
-       §sys:mycelium:echo  →  "echo * = echo *||| echo /* = echo"
-       §sys:mycelium:help  →  "help /* = help"
+
+2. For each discovered L2 module, route commands through THREE priority layers:
+
+       Layer 1  §sys:mycelium:rules:user:<keyword>      ← user overrides (set/del)
+       Layer 2  §sys:mycelium:rules:module:<keyword>     ← written by `mycelium update`
+       Layer 3  implicit default                         ← <stem> /* = <stem>
+                                                            <stem> *  = <stem> *
+
+   Resolution stops at the first layer that has a match for the input keyword.
+   Layer 1 is NEVER modified by `update`.
+
 3. Expose R_ECO3() so that raven (or any other shell) can call:
        mycelium <command> [args...]
-   mycelium resolves which module + args to call and dispatches via core.apix.
 
-Database key format
--------------------
-    §sys:mycelium:<stem>   → rule string ("|||"-separated alias rules)
+Storage keys
+------------
+    §sys:mycelium:rules:user:<keyword>    — written by `mycelium set`
+    §sys:mycelium:rules:module:<keyword>  — written by `mycelium update`
 
-Rule grammar (informal)
------------------------
-    rule      := lhs "=" rhs
-    lhs       := keyword ["*"]        # keyword with optional wildcard suffix
-    rhs       := module_cmd ["/*"]    # fixed command with optional arg injection
+Value format (same for both layers)
+------------------------------------
+    "|||"-separated list of per-keyword variants:
 
-    "*" on lhs  → keyword matches the input token AND extra tokens are captured
-    "/*" on rhs → captured extra tokens are injected at that position in the rhs
+        "/* = echo ||| * = echo /*"
 
-    Special lhs keyword "*" → catches any unmatched command (default route).
+    Variant syntax:
+        /*  = rhs_tokens          zero-arg variant  (matched when NO extra args)
+        *   = rhs_tokens          any-arg variant   (matched always)
+        *   = rhs_tokens /*       any-arg variant, injects extra args at /* position
+
+    Special keyword "*" → catch-all.
+
+`mycelium update` command
+-------------------------
+Strict sync of Layer 2 against the alias_rules currently declared by all active
+L2 modules.  After `update`, Layer 2 mirrors exactly what the modules declare:
+  - Keyword absent in L2               → write it silently.
+  - Keyword identical                  → skip silently.
+  - Keyword differs                    → ask user via banana (update or skip).
+  - Keyword in L2 but no module owns it → DELETE silently (stale entry removed).
+Layer 1 (user) keys are NEVER touched by `update`.
 """
 
 import os
 import sys
+
+import core
 
 # ---------------------------------------------------------------------------
 # Bootstrap: make sure core is importable regardless of cwd
 # ---------------------------------------------------------------------------
 try:
     import core.trail as trail
-    import core.hive as hive_mod
-    import core.apix as apix
+    import core.hive  as hive_mod
+    import core.apix  as apix
 except ImportError:
     _here = os.path.dirname(os.path.abspath(__file__))
-    _root = os.path.dirname(_here)           # modules/ → root
+    _root = os.path.dirname(_here)
     if _root not in sys.path:
         sys.path.insert(0, _root)
     import core.trail as trail
-    import core.hive as hive_mod
-    import core.apix as apix
+    import core.hive  as hive_mod
+    import core.apix  as apix
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-# Sub-commands that mycelium handles internally.
-# Used only for documentation / help display — NOT used to short-circuit routing.
-_INTERNAL_CMDS = frozenset({"list", "set", "del", "rule", "exe", "help"})
+_PREFIX_USER   = "§sys:mycelium:rules:user:"     # Layer 1 — user overrides
+_PREFIX_MODULE = "§sys:mycelium:rules:module:"   # Layer 2 — module aliases (update)
+
+_INTERNAL_CMDS = frozenset({"list", "set", "del", "rule", "exe",
+                             "help", "update", "reverse"})
+
+# Human-readable layer labels
+_LAYER_LABEL = {
+    _PREFIX_USER:   "user   (L1)",
+    _PREFIX_MODULE: "module (L2)",
+}
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — DB
 # ---------------------------------------------------------------------------
 
 def _open_db():
-    """Return an open HiveFS handle to the main database."""
     return hive_mod.HiveFS(filepath=str(trail.DB_FILE))
 
 
 def _load_l2_modules():
-    """
-    Return a dict  stem → module_object  for every .py in MODULES_DIR
-    whose R_ECO3inf() reports L2Module=True.
-
-    Unlike v1.0, "mycelium" is NO LONGER excluded — it must be routeable
-    so that commands like "mycelium help", "mycelium set ...", etc. resolve correctly.
-    """
+    """Return dict stem → module for every L2Module=True in MODULES_DIR."""
     l2 = {}
     for fname in os.listdir(str(trail.MODULES_DIR)):
         if not fname.endswith(".py") or fname.startswith("_"):
@@ -92,43 +106,103 @@ def _load_l2_modules():
             mod = apix.load_module(stem)
             if not hasattr(mod, "R_ECO3inf"):
                 continue
-            info = mod.R_ECO3inf()
-            if info.get("L2Module") is True:
+            if mod.R_ECO3inf().get("L2Module") is True:
                 l2[stem] = mod
         except Exception:
             pass
     return l2
 
+# ---------------------------------------------------------------------------
+# Rule parsing — stored (per-keyword) format
+# ---------------------------------------------------------------------------
 
-def _parse_rule(rule_str: str):
+def _parse_stored_variant(keyword: str, variant_str: str):
     """
-    Parse a single alias rule string.
+    Parse one variant stored under a layer key.
 
-    Syntax (strict — any other form is a syntax error):
-        cmd *       = rhs [*]    LHS ends with " *"  → matches cmd + zero or more args
-        cmd /*      = rhs        LHS ends with " /*" → matches cmd with EXACTLY zero args
-        cmd sub *   = rhs [*]    sub-keyword + args (more specific than cmd *)
-        cmd sub /*  = rhs        sub-keyword + no args
+    variant_str examples (keyword NOT included):
+        "/* = echo test"
+        "* = echo test /*"
+        "* = echo test"
 
-    The last token of the LHS must be either "*" or "/*" — anything else
-    is invalid and returns None (syntax error).
-
-    Returns: (lhs_tokens: list[str], no_args: bool, rhs_tokens: list[str|None])
-        lhs_tokens : all keyword tokens BEFORE the marker  e.g. ["cmd", "sub"]
-        no_args    : True if marker is "/*" (zero args required)
-                     False if marker is "*"  (zero or more args accepted)
-        rhs_tokens : list where None is an arg injection point
-
-    Returns None on syntax error.
+    Returns (lhs_tokens, no_args, rhs_tokens) or None on syntax error.
     """
+    variant_str = variant_str.strip()
+    if "=" not in variant_str:
+        return None
+
+    marker_raw, rhs_raw = variant_str.split("=", 1)
+    marker  = marker_raw.strip()
+    rhs_raw = rhs_raw.strip()
+
+    if marker == "/*":
+        no_args = True
+    elif marker == "*":
+        no_args = False
+    else:
+        return None
+
+    lhs_tokens = [keyword]
+
+    rhs_tokens = []
+    for tok in rhs_raw.split():
+        if tok in ("*", "/*"):
+            rhs_tokens.append(None)
+        else:
+            rhs_tokens.append(tok)
+
+    return (lhs_tokens, no_args, rhs_tokens)
+
+
+def _parse_stored_value(keyword: str, raw_value: str):
+    """
+    Parse the full value of a layer key for <keyword>.
+    Returns list of (lhs_tokens, no_args, rhs_tokens).
+    """
+    rules = []
+    for part in raw_value.split("|||"):
+        part = part.strip()
+        if not part:
+            continue
+        parsed = _parse_stored_variant(keyword, part)
+        if parsed:
+            rules.append(parsed)
+    return rules
+
+
+def _build_stored_value(rules_for_keyword: list) -> str:
+    """
+    Serialize a list of (lhs_tokens, no_args, rhs_tokens) back to stored string.
+    Only the variant marker and RHS are stored (keyword is the key).
+    """
+    parts = []
+    for (_, no_args, rhs_tokens) in rules_for_keyword:
+        marker  = "/*" if no_args else "*"
+        rhs_str = " ".join("/*" if t is None else t for t in rhs_tokens)
+        parts.append(f"{marker} = {rhs_str}")
+    return " ||| ".join(parts)
+
+# ---------------------------------------------------------------------------
+# Legacy alias_rules parser (for R_ECO3inf()["alias_rules"])
+# ---------------------------------------------------------------------------
+
+def _parse_legacy_rule(rule_str: str):
+    """
+    Parse a full legacy rule string (as found in alias_rules):
+        "echo * = echo /*"
+        "echo /* = echo"
+        "test /* = echo test"
+
+    Returns (lhs_tokens, no_args, rhs_tokens) or None.
+    """
+    rule_str = rule_str.strip()
     if "=" not in rule_str:
         return None
 
     lhs_raw, rhs_raw = rule_str.split("=", 1)
-    lhs_raw = lhs_raw.strip()
-    rhs_raw = rhs_raw.strip()
+    lhs_raw  = lhs_raw.strip()
+    rhs_raw  = rhs_raw.strip()
 
-    # --- LHS parsing ---
     lhs_parts = lhs_raw.split()
     if not lhs_parts:
         return None
@@ -141,15 +215,11 @@ def _parse_rule(rule_str: str):
         no_args    = False
         lhs_tokens = lhs_parts[:-1]
     else:
-        # No valid marker — syntax error
         return None
 
     if not lhs_tokens:
-        # Bare "*" or "/*" with no keyword — catch-all
         lhs_tokens = ["*"]
 
-    # --- RHS parsing ---
-    # "*" and "/*" on the RHS are both arg injection points
     rhs_tokens = []
     for tok in rhs_raw.split():
         if tok in ("*", "/*"):
@@ -160,51 +230,102 @@ def _parse_rule(rule_str: str):
     return (lhs_tokens, no_args, rhs_tokens)
 
 
-def _load_rules_for_stem(db, stem: str):
+def _group_legacy_rules_by_keyword(raw: str) -> dict:
     """
-    Read §sys:mycelium:<stem> from HiveFS and return a list of parsed rules.
-    Returns [] if the key does not exist or all rules have syntax errors.
+    Parse a legacy alias_rules string and group rules by their first LHS token.
+    Returns dict: keyword → list of (lhs_tokens, no_args, rhs_tokens)
     """
-    raw = db.get(f"§sys:mycelium:{stem}", default=None, as_str=True)
+    groups = {}
+    for part in raw.split("|||"):
+        parsed = _parse_legacy_rule(part)
+        if not parsed:
+            continue
+        lhs_tokens, no_args, rhs_tokens = parsed
+        keyword = lhs_tokens[0]
+        groups.setdefault(keyword, []).append(parsed)
+    return groups
+
+# ---------------------------------------------------------------------------
+# Layer helpers
+# ---------------------------------------------------------------------------
+
+def _layer_get(db, prefix: str, keyword: str):
+    """Return parsed rules from a specific layer prefix, or [] if absent."""
+    raw = db.get(f"{prefix}{keyword}", default=None, as_str=True)
     if not raw:
         return []
-    rules = []
-    for part in raw.split("|||"):
-        part = part.strip()
-        if not part:
-            continue
-        parsed = _parse_rule(part)
-        if parsed:
-            rules.append(parsed)
-    return rules
+    return _parse_stored_value(keyword, raw)
 
+
+def _layer_keywords(db, prefix: str) -> list:
+    """Return all keywords stored under a given layer prefix."""
+    try:
+        keys = [k for k in db.list() if k.startswith(prefix)]
+        return [k[len(prefix):] for k in keys]
+    except AttributeError:
+        pass
+    # Fallback: scan L2 stems + catch-all
+    l2       = _load_l2_modules()
+    keywords = list(l2.keys()) + ["*"]
+    existing = []
+    for kw in keywords:
+        raw = db.get(f"{prefix}{kw}", default=None, as_str=True)
+        if raw:
+            existing.append(kw)
+    return existing
+
+# ---------------------------------------------------------------------------
+# Default rules
+# ---------------------------------------------------------------------------
 
 def _default_rules_for_stem(stem: str):
     """
-    Implicit rule when no HiveFS entry exists:
-        <stem> * = <stem> *
-        <stem> /* = <stem>
-    Format: (lhs_tokens, no_args, rhs_tokens)
+    Implicit rules when no layer 1 or layer 2 entry exists:
+        stem /* = stem
+        stem *  = stem *
     """
     return [
-        ([stem], False, [stem, None]),   # stem * = stem *
-        ([stem], True,  [stem]),         # stem /* = stem
+        ([stem], True,  [stem]),          # stem /* = stem
+        ([stem], False, [stem, None]),    # stem *  = stem *
     ]
 
+# ---------------------------------------------------------------------------
+# inf alias_rules reader
+# ---------------------------------------------------------------------------
+
+def _rules_from_inf(stem: str, mod) -> dict:
+    """
+    Read R_ECO3inf()["alias_rules"], parse, group by keyword.
+    Returns dict keyword → list of rules.
+    """
+    try:
+        raw = mod.R_ECO3inf().get("alias_rules", "")
+        if raw:
+            return _group_legacy_rules_by_keyword(raw)
+    except Exception:
+        pass
+    return {}
+
+# ---------------------------------------------------------------------------
+# Build mycelium routing table  (3-layer)
+# ---------------------------------------------------------------------------
 
 def _build_mycelium(db):
     """
-    Return a list of (stem, rules) for every L2 module, INCLUDING mycelium itself.
+    Build the full routing table as a flat list of
+        (keyword, layer_label, rules_list)
+    where rules_list = list of (lhs_tokens, no_args, rhs_tokens).
 
-    - If §sys:mycelium:<stem> exists in HiveFS, parse and use those rules.
-    - If no entry exists, fall back to the implicit default:
-          <stem> * = <stem> *
-          <stem> /* = <stem>
+    Priority per keyword:
+        Layer 1  §sys:mycelium:rules:user:<keyword>
+        Layer 2  §sys:mycelium:rules:module:<keyword>
+        Layer 3  implicit default
+
+    Resolution stops at the first layer that has rules for the keyword.
     """
     l2 = _load_l2_modules()
 
-    # Ensure mycelium itself is always present even if load_module skips it
-    # (e.g. circular-import guard during boot).
+    # Ensure mycelium itself is included
     if "mycelium" not in l2:
         import importlib.util as _ilu
         _spec = _ilu.spec_from_file_location("mycelium", os.path.abspath(__file__))
@@ -216,31 +337,50 @@ def _build_mycelium(db):
             except Exception:
                 pass
 
-    result = []
+    routing_table      = []
+    all_keywords_seen  = set()
+
+    # ── Layer 1 : user overrides ──────────────────────────────────────────
+    for kw in _layer_keywords(db, _PREFIX_USER):
+        rules = _layer_get(db, _PREFIX_USER, kw)
+        if rules:
+            routing_table.append((kw, "user (L1)", rules))
+            all_keywords_seen.add(kw)
+
+    # ── Layer 2 : module aliases (written by update) ──────────────────────
+    for kw in _layer_keywords(db, _PREFIX_MODULE):
+        if kw in all_keywords_seen:
+            continue   # already covered by layer 1
+        rules = _layer_get(db, _PREFIX_MODULE, kw)
+        if rules:
+            routing_table.append((kw, "module (L2)", rules))
+            all_keywords_seen.add(kw)
+
+    # ── Layer 3 : implicit defaults for stems not covered above ───────────
     for stem in sorted(l2.keys()):
-        rules = _load_rules_for_stem(db, stem)
-        if not rules:
-            rules = _default_rules_for_stem(stem)
-        result.append((stem, rules))
-    return result
+        if stem not in all_keywords_seen:
+            routing_table.append((stem, "default (L3)", _default_rules_for_stem(stem)))
+            all_keywords_seen.add(stem)
+        else:
+            # Stem déjà en L1/L2 — compléter les variantes manquantes avec les defaults
+            for (kw, src, rules) in routing_table:
+                if kw != stem:
+                    continue
+                if not any(no_args for (_, no_args, _) in rules):
+                    rules.append(([stem], True, [stem]))         # /* = stem
+                if not any(not no_args for (_, no_args, _) in rules):
+                    rules.append(([stem], False, [stem, None]))  # * = stem *
+                break
 
+    return routing_table
 
-def _resolve(command_line: str, mycelium):
+# ---------------------------------------------------------------------------
+# Resolver
+# ---------------------------------------------------------------------------
+
+def _resolve(command_line: str, routing_table: list):
     """
-    Resolve command_line against the mycelium.
-
-    Matching rules
-    --------------
-    Each rule has (lhs_tokens, no_args, rhs_tokens).
-
-    lhs_tokens : the keyword chain the input must start with
-                 e.g. ["cmd", "sub"] matches input starting with "cmd sub"
-    no_args    : True  → input must have NO tokens after lhs_tokens  (/* marker)
-                 False → input may have zero or more extra tokens     (*  marker)
-
-    Specificity : rules with more lhs_tokens win over shorter ones.
-    Among equal length, no_args=True (/*) wins over no_args=False (*).
-    Catch-all lhs_tokens=["*"] is tried last.
+    Resolve command_line against the routing table.
 
     Returns (dispatch_string, None) or (None, error_message).
     """
@@ -248,38 +388,37 @@ def _resolve(command_line: str, mycelium):
         return None, "empty command"
 
     input_tokens = command_line.split()
+    candidates   = []   # (score, no_args_int, rhs_tokens, extra_tokens)
 
-    candidates = []   # (score, no_args_int, rhs_tokens, extra_tokens)
-
-    for _stem, rules in mycelium:
+    for (_kw, _src, rules) in routing_table:
         for (lhs_tokens, no_args, rhs_tokens) in rules:
 
-            # ── catch-all ───────────────────────────────────────────
             if lhs_tokens == ["*"]:
                 extra = input_tokens
-                score = 0
                 if no_args and extra:
                     continue
-                candidates.append((score, int(no_args), rhs_tokens, extra))
+                if not no_args and not extra:
+                    continue
+                candidates.append((0, int(no_args), rhs_tokens, extra))
                 continue
 
-            # ── prefix match ────────────────────────────────────────
+            # Prefix match
             n = len(lhs_tokens)
             if input_tokens[:n] != lhs_tokens:
                 continue
 
             extra = input_tokens[n:]
-
             if no_args and extra:
                 continue
+            if not no_args and not extra:   # * requires at least 1 arg
+                continue
 
-            score = n
-            candidates.append((score, int(no_args), rhs_tokens, extra))
+            candidates.append((n, int(no_args), rhs_tokens, extra))
 
     if not candidates:
         return None, f"unknown command: '{input_tokens[0]}'"
 
-    # Most specific: highest lhs length, then /* preferred over *
+    # Most specific: longest prefix, then /* preferred over *
     best = max(candidates, key=lambda c: (c[0], c[1]))
     _, _, rhs_tokens, extra = best
 
@@ -292,160 +431,406 @@ def _resolve(command_line: str, mycelium):
 
     return " ".join(final_tokens), None
 
-
 # ---------------------------------------------------------------------------
 # Public Python API
 # ---------------------------------------------------------------------------
 
-def rebuild_mycelium(log_fn=print):
-    """
-    Scan all L2 modules and print which ones have mycelium entries.
-    Does not write anything — mycelium entries are managed externally via HiveFS.
-    Returns a dict: stem → raw_rule_str | None
-    """
-    db = _open_db()
-    try:
-        l2 = _load_l2_modules()
-        result = {}
-        for stem in sorted(l2.keys()):
-            raw = db.get(f"§sys:mycelium:{stem}", default=None, as_str=True)
-            if raw:
-                result[stem] = raw
-                log_fn(f"  [mycelium] {stem}: {raw}")
-            else:
-                log_fn(f"  [mycelium] {stem}: (no entry — using default)")
-        return result
-    finally:
-        db.close()
-
-
 def resolve_command(command_line: str, log_fn=print):
-    """
-    Resolve command_line to a dispatchable apix command string.
-    Returns (dispatch_str | None, error_str | None).
-    """
     db = _open_db()
     try:
-        idx = _build_mycelium(db)
-        return _resolve(command_line, idx)
+        table = _build_mycelium(db)
+        return _resolve(command_line, table)
     finally:
         db.close()
-
 
 # ---------------------------------------------------------------------------
-# Internal sub-command handlers
+# Sub-command: list
 # ---------------------------------------------------------------------------
 
 def _cmd_list(tokens, db, log_fn):
     l2 = _load_l2_modules()
+
     if len(tokens) > 1:
-        stem = tokens[1]
-        if stem not in l2:
-            log_fn(f"[mycelium] '{stem}' is not a registered L2 module")
+        target = tokens[1]
+        found  = False
+
+        # Check each layer in order
+        for prefix, label in ((_PREFIX_USER, "user (L1)"), (_PREFIX_MODULE, "module (L2)")):
+            raw = db.get(f"{prefix}{target}", default=None, as_str=True)
+            if raw:
+                found = True
+                log_fn(f"{prefix}{target}  [{label}]")
+                log_fn(f"  stored : {raw}")
+                for rule in _parse_stored_value(target, raw):
+                    lhs_tokens, no_args, rhs_tokens = rule
+                    marker  = " /*" if no_args else " *"
+                    rhs_str = " ".join("/*" if t is None else t for t in rhs_tokens)
+                    log_fn(f"  rule   : '{' '.join(lhs_tokens)}{marker}' → '{rhs_str}'")
+
+        if not found:
+            # Show inf / default
+            mod = l2.get(target)
+            if mod:
+                inf_groups = _rules_from_inf(target, mod)
+                if target in inf_groups:
+                    rules = inf_groups[target]
+                    val   = _build_stored_value(rules)
+                    log_fn(f"  (not in HiveFS — inf alias_rules) = {val}")
+                    for rule in rules:
+                        lhs_tokens, no_args, rhs_tokens = rule
+                        marker  = " /*" if no_args else " *"
+                        rhs_str = " ".join("/*" if t is None else t for t in rhs_tokens)
+                        log_fn(f"  rule   : '{' '.join(lhs_tokens)}{marker}' → '{rhs_str}'")
+                    log_fn("  → would be stored in module (L2) after `mycelium update`")
+                else:
+                    rules = _default_rules_for_stem(target)
+                    val   = _build_stored_value(rules)
+                    log_fn(f"  (not in HiveFS — implicit default) = {val}")
+                    for rule in rules:
+                        lhs_tokens, no_args, rhs_tokens = rule
+                        marker  = " /*" if no_args else " *"
+                        rhs_str = " ".join("/*" if t is None else t for t in rhs_tokens)
+                        log_fn(f"  rule   : '{' '.join(lhs_tokens)}{marker}' → '{rhs_str}'")
+                return 0
+
+            log_fn(f"[mycelium] '{target}': not found in any layer and not a known L2 stem")
             return 1
-        raw = db.get(f"§sys:mycelium:{stem}", default=None, as_str=True)
-        if raw:
-            log_fn(f"§sys:mycelium:{stem} = {raw}")
-            rules = _load_rules_for_stem(db, stem)
-            for (kw_tokens, no_args, rhs_tokens) in rules:
-                kw_str  = " ".join(kw_tokens)
-                marker  = " /*" if no_args else " *"
-                rhs_str = " ".join("/*" if t is None else t for t in rhs_tokens)
-                log_fn(f"  rule: '{kw_str}{marker}' → '{rhs_str}'")
-        else:
-            log_fn(f"§sys:mycelium:{stem} = (no entry — default: {stem} * = {stem} *)")
+
         return 0
 
-    log_fn("L2 modules and their mycelium entries:")
-    for stem in sorted(l2.keys()):
-        raw = db.get(f"§sys:mycelium:{stem}", default=None, as_str=True)
-        status = raw if raw else f"(default: {stem} * = {stem} *)"
-        log_fn(f"  {stem:<20} {status}")
+    # ── Full listing ──────────────────────────────────────────────────────
+    table = _build_mycelium(db)
+
+    # Group by layer for readability
+    by_layer = {}
+    for kw, src, rules in table:
+        by_layer.setdefault(src, []).append((kw, rules))
+
+    layer_order = ["user (L1)", "module (L2)", "default (L3)"]
+    log_fn("mycelium routing table")
+    log_fn("=" * 60)
+    for layer in layer_order:
+        entries = by_layer.get(layer, [])
+        if not entries:
+            continue
+        log_fn(f"\n  ── {layer} ──")
+        for kw, rules in entries:
+            val = _build_stored_value(rules)
+            log_fn(f"    {kw:<20} {val}")
+
     return 0
 
+# ---------------------------------------------------------------------------
+# Sub-command: set  (writes to Layer 1 — user)
+# ---------------------------------------------------------------------------
 
 def _cmd_set(tokens, args_raw, db, log_fn):
+    """
+    mycelium set <keyword> <variants>
+
+    Always writes to Layer 1 (user overrides).
+    variants use the per-keyword format:
+        "/* = module args ||| * = module args /*"
+    """
     if len(tokens) < 3:
-        log_fn("[mycelium] usage: mycelium set <stem> <rules>")
+        log_fn("[mycelium] usage: mycelium set <keyword> <variants>")
+        log_fn("  variants: '/* = module args ||| * = module args /*'")
+        log_fn("  (always stored in Layer 1 — user override)")
         return 1
-    stem = tokens[1]
-    parts = args_raw.strip().split(None, 2)
+
+    keyword = tokens[1]
+    parts   = args_raw.strip().split(None, 2)
     if len(parts) < 3:
-        log_fn("[mycelium] usage: mycelium set <stem> <rules>")
+        log_fn("[mycelium] usage: mycelium set <keyword> <variants>")
         return 1
-    rules = parts[2]
-    if len(rules) >= 2 and rules[0] in ('"', "'") and rules[-1] == rules[0]:
-        rules = rules[1:-1]
-    db.set(f"§sys:mycelium:{stem}", rules)
-    log_fn(f"[mycelium] §sys:mycelium:{stem} set to: {rules}")
+    raw_val = parts[2]
+    if len(raw_val) >= 2 and raw_val[0] in ('"', "'") and raw_val[-1] == raw_val[0]:
+        raw_val = raw_val[1:-1]
+
+    parsed = _parse_stored_value(keyword, raw_val)
+    if not parsed:
+        log_fn(f"[mycelium] syntax error in rule variants: '{raw_val}'")
+        log_fn("  expected: '/* = rhs' or '* = rhs' (separated by |||)")
+        return 1
+
+    db.set(f"{_PREFIX_USER}{keyword}", raw_val)
+    log_fn(f"[mycelium] {_PREFIX_USER}{keyword} set to: {raw_val}  [user (L1)]")
     return 0
 
+# ---------------------------------------------------------------------------
+# Sub-command: del  (removes from Layer 1 — user)
+# ---------------------------------------------------------------------------
 
 def _cmd_del(tokens, db, log_fn):
-    if len(tokens) < 2:
-        log_fn("[mycelium] usage: mycelium del <stem>")
-        return 1
-    stem = tokens[1]
-    if db.delete(f"§sys:mycelium:{stem}"):
-        log_fn(f"[mycelium] §sys:mycelium:{stem} deleted")
-    else:
-        log_fn(f"[mycelium] §sys:mycelium:{stem} not found")
-    return 0
+    """
+    mycelium del <keyword>
 
+    Removes the user (L1) override for <keyword>.
+    Does NOT touch Layer 2 (module) entries.
+    After deletion, Layer 2 or Layer 3 will take effect.
+    """
+    if len(tokens) < 2:
+        log_fn("[mycelium] usage: mycelium del <keyword>")
+        return 1
+
+    keyword  = tokens[1]
+    l1_key   = f"{_PREFIX_USER}{keyword}"
+    l2_key   = f"{_PREFIX_MODULE}{keyword}"
+    l2       = _load_l2_modules()
+
+    if db.delete(l1_key):
+        log_fn(f"[mycelium] {l1_key} deleted  [user (L1) removed]")
+
+        # Inform which layer now takes effect
+        raw_l2 = db.get(l2_key, default=None, as_str=True)
+        if raw_l2:
+            log_fn(f"[mycelium] '{keyword}' now resolved via module (L2): {raw_l2}")
+        else:
+            mod = l2.get(keyword)
+            if mod:
+                log_fn(f"[mycelium] '{keyword}' now resolved via default (L3)")
+            else:
+                log_fn(f"[mycelium] '{keyword}' has no L2/L3 fallback — will be unknown")
+        return 0
+
+    # Not in L1 — check where it does live
+    raw_l2 = db.get(l2_key, default=None, as_str=True)
+    if raw_l2:
+        log_fn(f"[mycelium] '{keyword}' has no user (L1) override to delete")
+        log_fn(f"[mycelium] current module (L2) entry: {raw_l2}")
+        log_fn(f"[mycelium] to override instead: mycelium set {keyword} <variants>")
+        return 0
+
+    # Check inf
+    for stem, mod in l2.items():
+        inf_groups = _rules_from_inf(stem, mod)
+        if keyword in inf_groups:
+            raw_inf = _build_stored_value(inf_groups[keyword])
+            log_fn(f"[mycelium] '{keyword}' has no HiveFS entry (source: inf of '{stem}')")
+            log_fn(f"[mycelium] inf value: {raw_inf}")
+            log_fn(f"[mycelium] run `mycelium update` to load it into L2, or:")
+            log_fn(f"[mycelium]     mycelium set {keyword} <variants>  to create an L1 override")
+            return 0
+
+    log_fn(f"[mycelium] '{keyword}': not found in any layer")
+    return 1
+
+# ---------------------------------------------------------------------------
+# Sub-command: rule  (dry-run resolver)
+# ---------------------------------------------------------------------------
 
 def _cmd_rule(args_raw, log_fn):
-    parts = args_raw.strip().split(None, 1)
+    parts    = args_raw.strip().split(None, 1)
     rule_cmd = parts[1] if len(parts) > 1 else ""
     if not rule_cmd:
         log_fn("[mycelium] usage: mycelium rule <command> [args...]")
         return 1
+
     db = _open_db()
     try:
-        idx = _build_mycelium(db)
+        table = _build_mycelium(db)
     finally:
         db.close()
-    dispatch, err = _resolve(rule_cmd, idx)
+
+    dispatch, err = _resolve(rule_cmd, table)
     if dispatch is None:
         log_fn(f"[mycelium] {err}")
         return 1
+
     d_parts  = dispatch.split()
     mod_name = d_parts[0]
     mod_args = " ".join(d_parts[1:]) if len(d_parts) > 1 else ""
+
+    # Find which layer answered
+    db2 = _open_db()
+    try:
+        input_kw = rule_cmd.split()[0]
+        raw_l1   = db2.get(f"{_PREFIX_USER}{input_kw}",   default=None, as_str=True)
+        raw_l2   = db2.get(f"{_PREFIX_MODULE}{input_kw}", default=None, as_str=True)
+        if raw_l1:
+            source = f"user (L1): {raw_l1}"
+        elif raw_l2:
+            source = f"module (L2): {raw_l2}"
+        else:
+            l2  = _load_l2_modules()
+            mod = l2.get(mod_name)
+            inf_grp = _rules_from_inf(mod_name, mod) if mod else {}
+            if input_kw in inf_grp:
+                source = f"inf (not yet in L2 — run update): {_build_stored_value(inf_grp[input_kw])}"
+            else:
+                source = "default (L3)"
+    except Exception:
+        source = "?"
+    finally:
+        db2.close()
+
     if mod_args:
-        log_fn(f"[mycelium] '{rule_cmd}' → {mod_name} --args=\"{mod_args}\"")
+        log_fn(f"[mycelium] '{rule_cmd}' → {mod_name} --args=\"{mod_args}\"  [{source}]")
     else:
-        log_fn(f"[mycelium] '{rule_cmd}' → {mod_name}")
+        log_fn(f"[mycelium] '{rule_cmd}' → {mod_name}  [{source}]")
     return 0
 
+# ---------------------------------------------------------------------------
+# Sub-command: reverse
+# ---------------------------------------------------------------------------
+
+def _cmd_reverse(tokens, db, log_fn):
+    if len(tokens) < 2:
+        log_fn("[mycelium] usage: mycelium reverse <target_module>")
+        return 1
+    target = tokens[1]
+
+    table = _build_mycelium(db)
+    found = []
+
+    for (kw, src, rules) in table:
+        for (lhs_tokens, no_args, rhs_tokens) in rules:
+            rhs_mod = next((t for t in rhs_tokens if t is not None), None)
+            if rhs_mod != target:
+                continue
+            lhs_str = " ".join(lhs_tokens)
+            marker  = " /*" if no_args else " *"
+            rhs_str = " ".join("/*" if t is None else t for t in rhs_tokens)
+            found.append((kw, src, f"{lhs_str}{marker} = {rhs_str}"))
+
+    if not found:
+        log_fn(f"[mycelium] no rules point to '{target}'")
+        return 0
+
+    log_fn(f"Rules pointing to '{target}':")
+    for kw, src, rule_str in found:
+        log_fn(f"  [{src}] (key:{kw})  {rule_str}")
+    return 0
 
 # ---------------------------------------------------------------------------
-# Shared execute helper — used by both R_ECO3 (mycelium exe) and exe.R_ECO3
+# Sub-command: update  (strict sync of Layer 2)
+# ---------------------------------------------------------------------------
+
+def _cmd_update(db, log_fn):
+    """
+    Strict sync of Layer 2 (§sys:mycelium:rules:module:*) against the current
+    alias_rules declared by all active L2 modules.
+
+    Algorithm
+    ---------
+    1. Collect every keyword declared by any module's alias_rules  → `inf_index`
+    2. Collect every keyword currently stored in L2                → `existing_l2`
+
+    For each keyword in inf_index:
+      - Absent in L2  → write silently.
+      - Identical     → skip silently.
+      - Different     → ask via banana; update or skip.
+
+    For each keyword in existing_l2 NOT in inf_index:
+      - Delete silently (module was removed or alias was dropped).
+
+    Layer 1 (user) is NEVER touched.
+    """
+    l2        = _load_l2_modules()
+    written   = 0
+    skipped   = 0
+    updated   = 0
+    conflicts = 0
+    deleted   = 0
+
+    try:
+        banana = apix.load_module("banana")
+    except Exception:
+        banana = None
+
+    # ── Step 1: build inf_index  keyword → serialised value ──────────────
+    inf_index = {}   # keyword → new_val (last writer wins if two modules clash)
+    for stem in sorted(l2.keys()):
+        mod        = l2[stem]
+        inf_groups = _rules_from_inf(stem, mod)
+        for keyword, inf_rules in inf_groups.items():
+            inf_index[keyword] = _build_stored_value(inf_rules)
+
+    # ── Step 2: collect existing L2 keywords ─────────────────────────────
+    existing_l2 = set(_layer_keywords(db, _PREFIX_MODULE))
+
+    # ── Step 3: add / update ─────────────────────────────────────────────
+    for keyword, new_val in inf_index.items():
+        l2_key  = f"{_PREFIX_MODULE}{keyword}"
+        cur_val = db.get(l2_key, default=None, as_str=True)
+
+        if cur_val is None:
+            db.set(l2_key, new_val)
+            log_fn(f"[mycelium] update: + {keyword} = {new_val}")
+            written += 1
+
+        elif cur_val.strip() == new_val.strip():
+            skipped += 1
+
+        else:
+            conflicts += 1
+            log_fn(f"[mycelium] conflict for keyword '{keyword}':")
+            log_fn(f"  current (L2) : {cur_val}")
+            log_fn(f"  new     (inf): {new_val}")
+
+            choice = None
+            if banana is not None:
+                try:
+                    _, choice = banana.R_ECO3(
+                        f"question --msg=\"Conflict for '{keyword}' — keep which?\" "
+                        f"--choices=\"keep current (L2),use new (inf),skip\"",
+                        log_fn=log_fn,
+                    )
+                except Exception:
+                    choice = None
+
+            if choice is None:
+                log_fn("[mycelium] (non-interactive) keeping current L2 value")
+                choice = "keep current"
+
+            if "new" in str(choice).lower() or "inf" in str(choice).lower():
+                db.set(l2_key, new_val)
+                log_fn(f"[mycelium] update: ~ {keyword} = {new_val}")
+                updated += 1
+            elif "skip" in str(choice).lower():
+                log_fn(f"[mycelium] update: skipped '{keyword}'")
+            else:
+                log_fn(f"[mycelium] update: kept current L2 value for '{keyword}'")
+
+    # ── Step 4: delete stale L2 entries ──────────────────────────────────
+    stale = existing_l2 - set(inf_index.keys())
+    for keyword in sorted(stale):
+        l2_key = f"{_PREFIX_MODULE}{keyword}"
+        db.delete(l2_key)
+        log_fn(f"[mycelium] update: - {keyword}  (no longer in any module alias_rules)")
+        deleted += 1
+
+    log_fn(
+        f"[mycelium] update done — "
+        f"wrote:{written}  skipped:{skipped}  updated:{updated}  "
+        f"conflicts:{conflicts}  deleted:{deleted}"
+    )
+    log_fn("[mycelium] note: user (L1) overrides are never modified by update")
+    return 0
+
+# ---------------------------------------------------------------------------
+# Shared execute helper
 # ---------------------------------------------------------------------------
 
 def _exe(command_line: str, log_fn=print):
-    """
-    Resolve command_line via the mycelium and dispatch through spider -vr.
-    Returns an int exit code.
-    """
     if not command_line.strip():
         log_fn("[mycelium] usage: mycelium exe <command> [args...]")
         return 1
 
     db = _open_db()
     try:
-        idx = _build_mycelium(db)
+        table = _build_mycelium(db)
     finally:
         db.close()
 
-    dispatch, err = _resolve(command_line, idx)
+    dispatch, err = _resolve(command_line, table)
     if dispatch is None:
         log_fn(f"[mycelium] {err}")
         return 1
 
-    d_parts  = dispatch.split()
-    mod_name = d_parts[0]
-    mod_args = " ".join(d_parts[1:]) if len(d_parts) > 1 else ""
-
+    d_parts     = dispatch.split()
+    mod_name    = d_parts[0]
+    mod_args    = " ".join(d_parts[1:]) if len(d_parts) > 1 else ""
     spider_args = f"{mod_name} -vr"
     if mod_args:
         spider_args += f" --args=\"{mod_args}\""
@@ -453,28 +838,24 @@ def _exe(command_line: str, log_fn=print):
     code, result = apix.run_module_cmd("spider", "run", spider_args, log_fn=log_fn)
     return code if isinstance(code, int) else 0
 
-
 # ---------------------------------------------------------------------------
 # R_ECO3 — main entry point
 # ---------------------------------------------------------------------------
 
 def R_ECO3(args: str, log_fn=print):
     """
-    mycelium <command> [args...]
+    mycelium <sub-command> [args...]
 
-    Resolves <command> (and optional args) against the module mycelium stored in
-    §sys:mycelium:* and dispatches to the appropriate module via core.apix.
-
-    Special sub-commands
-    --------------------
-    mycelium list            — list all L2 modules and their mycelium entries
-    mycelium list <stem>     — show rules for a specific module stem
-    mycelium set <stem> <rules>
-                          — write §sys:mycelium:<stem> in HiveFS
-    mycelium del <stem>      — delete §sys:mycelium:<stem> from HiveFS
-    mycelium rule <cmd>      — show resolved dispatch without running
-    mycelium exe <cmd>       — resolve and run via spider -vr
-    mycelium help            — show this help
+    Sub-commands
+    ------------
+    list [<keyword>]            list routing table (all layers), or detail for one keyword
+    set  <keyword> <variants>   write user override  → Layer 1
+    del  <keyword>              delete user override from Layer 1
+    rule <cmd>                  dry-run: show resolved dispatch + which layer answered
+    exe  <cmd> [args...]        resolve and run via spider -vr
+    update                      load module alias_rules into Layer 2 (never touches L1)
+    reverse <module>            list all rules whose RHS dispatches to <module>
+    help                        show this manual
     """
     try:
         import core.utils as _utils
@@ -483,13 +864,11 @@ def R_ECO3(args: str, log_fn=print):
         tokens = args.strip().split() if args.strip() else []
 
     if not tokens:
-        log_fn("[mycelium] usage: mycelium <command> [args...]")
-        log_fn("        run 'mycelium help' for details")
+        log_fn("This module cannot be run without arguments. Please refer to the manual for usage instructions.")
         return 1
 
     sub = tokens[0]
 
-    # ------------------------------------------------------------------ list
     if sub == "list":
         db = _open_db()
         try:
@@ -497,7 +876,6 @@ def R_ECO3(args: str, log_fn=print):
         finally:
             db.close()
 
-    # ------------------------------------------------------------------- set
     if sub == "set":
         db = _open_db()
         try:
@@ -505,7 +883,6 @@ def R_ECO3(args: str, log_fn=print):
         finally:
             db.close()
 
-    # ------------------------------------------------------------------- del
     if sub == "del":
         db = _open_db()
         try:
@@ -513,28 +890,37 @@ def R_ECO3(args: str, log_fn=print):
         finally:
             db.close()
 
-    # ------------------------------------------------------------------ rule
     if sub == "rule":
         return _cmd_rule(args, log_fn)
 
-    # ------------------------------------------------------------------ exe
     if sub == "exe":
-        parts = args.strip().split(None, 1)
+        parts   = args.strip().split(None, 1)
         exe_cmd = parts[1] if len(parts) > 1 else ""
         if not exe_cmd:
             log_fn("[mycelium] usage: mycelium exe <command> [args...]")
             return 1
         return _exe(exe_cmd, log_fn)
 
-    # ------------------------------------------------------------------ help
+    if sub == "update":
+        db = _open_db()
+        try:
+            return _cmd_update(db, log_fn)
+        finally:
+            db.close()
+
+    if sub == "reverse":
+        db = _open_db()
+        try:
+            return _cmd_reverse(tokens, db, log_fn)
+        finally:
+            db.close()
+
     if sub == "help":
         log_fn(R_ECO3inf()["manual"])
         return 0
 
-    # ------------------------------------------------------------------ unknown
     log_fn(f"[mycelium] unknown sub-command: '{sub}' — use 'mycelium help'")
     return 1
-
 
 # ---------------------------------------------------------------------------
 # R_ECO3dep / R_ECO3inf
@@ -549,6 +935,7 @@ def R_ECO3dep():
             ("core.trail", ("1.1",)),
             ("core.utils", ("1.1",)),
             ("spider",     ("1.8",)),
+            ("banana",     ("1.1",)),
         ),
     )
 
@@ -556,82 +943,88 @@ def R_ECO3dep():
 def R_ECO3inf():
     return {
         "name":        "mycelium",
-        "desc":        "Module mycelium: maps keyword aliases to L2 modules via §sys:mycelium:*",
-        "help":        "mycelium <command> [args] | mycelium list | mycelium set <stem> <rules> | mycelium del <stem>",
-        "version_mod": "1.1",
+        "desc":        "Module mycelium: 3-layer command dispatcher (user / module / default)",
+        "help":        "mycelium list | set <kw> <variants> | del <kw> | rule <cmd> | exe <cmd> | update | reverse <mod>",
+        "version_mod": "1.3",
         "L2Module":    True,
         "manual": """
-mycelium — R-ECOSYSTEM module mycelium & command dispatcher
-======================================================
+mycelium — R-ECOSYSTEM command dispatcher  v1.3
+===============================================
 
 SYNOPSIS
     mycelium <command> [args...]
-    mycelium list [<stem>]
-    mycelium set <stem> <rules>
-    mycelium del <stem>
-    mycelium rule <cmd>
-    mycelium exe <cmd> [args...]
+    mycelium list [<keyword>]
+    mycelium set  <keyword> <variants>
+    mycelium del  <keyword>
+    mycelium rule <cmd> [args...]
+    mycelium exe  <cmd> [args...]
+    mycelium update
+    mycelium reverse <module>
     mycelium help
 
-DESCRIPTION
-    mycelium scans MODULES_DIR for every Python module whose R_ECO3inf()
-    declares L2Module=True. For each such module it looks up the key
-    §sys:mycelium:<stem> in HiveFS.
+THREE-LAYER ROUTING
+    Resolution stops at the first layer that has a match for the keyword.
 
-    If the key exists, its value is a "|||"-separated list of alias rules.
-    When a user types a command that matches one of those rules, mycelium
-    rewrites it into the target module call and dispatches it through
-    core.apix (via spider -vr for exe).
+    Layer 1 — user (L1)      §sys:mycelium:rules:user:<keyword>
+        Written by:  mycelium set
+        Removed by:  mycelium del
+        Never touched by update.
+        Use this for personal aliases or to override any module alias.
 
-    mycelium itself is always included in the routing table, so commands
-    like "mycelium help", "mycelium set ...", "exe mycelium set ..." all resolve
-    correctly without any special-casing.
+    Layer 2 — module (L2)    §sys:mycelium:rules:module:<keyword>
+        Written by:  mycelium update  (from R_ECO3inf()["alias_rules"])
+        Only added or updated, never deleted by update.
+        If a Layer 1 entry exists for a keyword, Layer 2 is ignored for it.
 
-RULE SYNTAX
-    Each rule is strictly:
+    Layer 3 — default (L3)   (no HiveFS entry)
+        Implicit rule:  <stem> /* = <stem>
+                        <stem> *  = <stem> *
+        Applied when neither L1 nor L2 has an entry for the keyword.
 
-        lhs_tokens MARKER = rhs_tokens
+VARIANT FORMAT (same for L1 and L2)
+    "/* = rhs"                zero-arg variant (matched when no extra args)
+    "* = rhs"                 any-arg variant  (matched always)
+    "* = rhs /*"              any-arg variant, injects extra args at /* position
+    Separate multiple variants with "|||":
+        "/* = echo ||| * = echo /*"
 
-    LHS MARKERS (mandatory — no marker = syntax error)
-        keyword *         matches "keyword" + zero or more args (args forwarded)
-        keyword /*        matches "keyword" with EXACTLY zero args
+COMMANDS
+    mycelium set echo "/* = echo ||| * = echo /*"
+        → writes to Layer 1 (user override)
 
-    Sub-keywords for specificity:
-        keyword sub *     matches "keyword sub" + zero or more args
-        keyword sub /*    matches "keyword sub" with zero args
+    mycelium del echo
+        → removes L1 entry; L2 or L3 then takes effect
 
-    More tokens on the LHS = higher specificity (wins over shorter rules).
-    Among equal length, /* beats * when both match.
+    mycelium update
+        → strict sync: Layer 2 mirrors exactly what modules declare today
+        → adds keywords not yet in L2
+        → updates keywords whose value changed (prompts via banana on conflict)
+        → DELETES L2 keywords no longer declared by any module
+        → never modifies Layer 1 (user overrides)
 
-    RHS
-        module arg *      inject extra args at "*" position
-        module arg        fixed dispatch, no injection
+    mycelium list
+        → shows all three layers grouped
 
-    Catch-all: bare "* = ..." or "/* = ..." (lowest priority)
+    mycelium list echo
+        → shows which layers have an entry for 'echo' and what they contain
 
-    Rule separator: "|||"  (not ";")
+    mycelium rule <cmd>
+        → dry-run: shows resolved dispatch + which layer answered
+
+    mycelium reverse <module>
+        → lists every rule (all layers) whose RHS dispatches to <module>
 
 EXAMPLES
-    §sys:mycelium:echo = "echo * = echo *||| echo /* = echo"
+    §sys:mycelium:rules:user:greet = "/* = hello ||| * = hello /*"
+        greet           →  hello        [user (L1)]
+        greet world     →  hello world  [user (L1)]
 
-        echo              →  echo                    (/* rule, zero args)
-        echo hello world  →  echo hello world        (* rule, args forwarded)
+    §sys:mycelium:rules:module:help = "/* = helper"
+        help            →  helper       [module (L2)]
+        help foo        →  unknown      (no * variant — add it with `mycelium set`)
 
-    §sys:mycelium:echo = "test * = echo test *||| test /* = echo test"
-
-        test              →  echo test               (/* rule)
-        test foo bar      →  echo test foo bar       (* rule)
-
-DATABASE KEYS
-    §sys:mycelium:<stem>     Rule string for module <stem>
-
-SUB-COMMANDS
-    list [<stem>]         Show L2 modules and their raw rule strings.
-                          With a stem, show the parsed rule breakdown.
-    set <stem> <rules>    Write §sys:mycelium:<stem> in HiveFS.
-    del <stem>            Delete §sys:mycelium:<stem> from HiveFS.
-    rule <cmd>            Dry-run: show resolved dispatch without executing.
-    exe <cmd> [args...]   Resolve and execute via spider -vr.
-    help                  Show this manual.
+    stem 'echo' with no HiveFS entry:
+        echo            →  echo         [default (L3)]
+        echo hi there   →  echo hi there [default (L3)]
 """,
     }
