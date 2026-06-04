@@ -11,7 +11,7 @@ def R_ECO3(args, log_fn=print):
 
     state["console"] = rich.console.Console()
     state["questionary"] = questionary
-    printl = state["console"].print
+    printl = core.apix.R_ECO3("run bird")[1][1] # type: ignore
 
     if core.apix.R_ECO3("run banana banner", printl) != (0, (0, None)):
         return 1
@@ -46,15 +46,17 @@ def R_ECO3(args, log_fn=print):
     # ─── Main loop ────────────────────────────────────────────────
     while True:
         #* BEE
-        core.apix.R_ECO3("run bee execute RAVEN_COMMAND_BEFORE -i", log_fn)
+        core.apix.R_ECO3("run bee execute RAVEN_COMMAND_BEFORE -i", printl)
         
         style = state["db"].get(f"§sys:user:uid:{usr}.style", None)
         if style is None:
             state["db"].set(f"§sys:user:uid:{usr}.style", "Default")
         usrn = state["db"].get(f"§sys:user:uid:{usr}.name")
+        
+        cwd = core.apix.R_ECO3("run tree cwd", lambda x: x)[1][1] #type: ignore
 
         cmd = core.apix.R_ECO3(
-            f"run moss --style={style} --folder=~ --user={usrn} --host=R-ECO3", printl
+            f"run moss --style={style} --folder={cwd} --user={usrn} --host=R-ECO3", printl
         )
         cmd = str(cmd[1]).strip()
 
@@ -75,11 +77,11 @@ def R_ECO3(args, log_fn=print):
         
         if result[0] == 1:
             core.apix.R_ECO3(
-                f"run banana err --msg='Module not found: [bold]{module_name}[/bold]'", #type: ignore
+                f"run banana err --msg='Module not found: [bold]{cmd}[/bold]'", #type: ignore
                 printl
             )
             
-        core.apix.R_ECO3("run bee execute RAVEN_COMMAND_AFTER -i", log_fn)
+        core.apix.R_ECO3("run bee execute RAVEN_COMMAND_AFTER -i", printl)
 
     return 0
 
@@ -102,7 +104,7 @@ def R_ECO3inf():
         "desc":        "Main RAVEN shell — authenticates the user and runs the interactive command loop",
         "help":        "Displays the banner, authenticates via login, then enters an interactive prompt loop. Commands are dispatched through spider -vr. Type 'exit', 'quit', or 'q' to leave.",
         "version_mod": "1.2",
-        "L2Module":    True,
+        "L2Module":    False,
         "manual": (
             "raven\n\n"
             "AVAILABLE COMMANDS & ARGUMENTS:\n"
