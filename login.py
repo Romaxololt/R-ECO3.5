@@ -127,7 +127,7 @@ def R_ECO3inf():
         "desc":        "Account authentication and creation for RAVEN",
         "help":        "Handles user login and account creation. Shows an account picker if no UID is provided, attempts direct login if a UID is supplied, and triggers first-time account creation if no accounts exist.",
         "version_mod": "1.1",
-        "L2Module":    True,
+        "L2Module":    False,
         "manual": (
             "login [--uid=UID]\n\n"
             "AVAILABLE COMMANDS & ARGUMENTS:\n"
