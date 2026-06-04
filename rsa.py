@@ -514,18 +514,6 @@ def R_ECO3(args: str, log_fn=print):
     """
     parts = args.strip().split()
 
-    # apix passe "run <module> <cmd> [args...]"
-    # Si appelé via "run crypto <cmd>", parts[0]=="run", parts[1]=="crypto"
-    # On normalise pour accepter les deux formes.
-    if len(parts) >= 2 and parts[0] == "run":
-        parts = parts[1:]           # retire "run"
-    if len(parts) >= 1 and parts[0] == "crypto":
-        parts = parts[1:]           # retire le nom du module
-
-    if not parts:
-        log_fn("[crypto] Commandes : " + "  |  ".join(_COMMANDS))
-        return 0, (0, None)
-
     cmd  = parts[0].lower()
     rest = parts[1:]
 
@@ -649,13 +637,14 @@ def R_ECO3dep():
 
 def R_ECO3inf():
     return {
-        "name":        "crypto",
+        "name":        "rsa",
         "desc":        "Pure-Python RSA+AES+OAEP cryptographic primitives — no external dependencies",
         "help":        "Provides RSA key generation (random or deterministic), hybrid RSA+AES-256-CBC encryption/decryption, standalone AES-CBC operations, OAEP padding, and key fingerprinting. All ops available via core.apix.",
         "version_mod": "1.0",
         "L2Module":    True,
+        "alias_rules": "rsa /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "manual": (
-            "crypto <command> [args]\n\n"
+            "rsa <command> [args]\n\n"
             "AVAILABLE COMMANDS & ARGUMENTS:\n"
             "  fingerprint <n>\n"
             "    Returns the SHA-256[:16] fingerprint of a RSA modulus.\n\n"
