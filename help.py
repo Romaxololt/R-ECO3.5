@@ -67,6 +67,7 @@ def R_ECO3inf():
         "desc":        "Display help and descriptions for all available RAVEN modules",
         "help":        "Lists all available RAVEN modules with their name and short description. When called with no arguments, iterates over every module in the modules directory and prints its metadata.",
         "version_mod": "1.0",
+        "alias_rules": "help * = manual *",
         "L2Module":    True,
         "manual": (
             "help\n\n"
