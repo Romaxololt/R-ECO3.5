@@ -843,7 +843,7 @@ def R_ECO3(args: str, log_fn=print):
     import core
     pos, _ = core.utils.parse_command(args)
 
-    if not pos or pos[0] in ("help", "?", "h"):
+    if pos[0] in ("help", "?", "h"):
         log_fn("[bold cyan]prism[/bold cyan] — mathematical functions\n")
         log_fn("  [dim]Usage:[/dim]  prism <operation> [args...]\n")
         seen = set()
@@ -900,6 +900,7 @@ def R_ECO3inf():
         "help":        "Decompose and transform numbers. Full suite: roots, powers, logarithms, trigonometry, hyperbolic, differential/integral calculus, combinatorics, statistics, base conversions, and free expression evaluation.",
         "version_mod": "1.1",
         "L2Module":    True,
+        "alias_rules": "prism /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "manual": (
             "prism <operation> [args...]\n\n"
             "ROOTS\n"
