@@ -174,25 +174,22 @@ def R_ECO3inf():
         "help":        "Renders a styled terminal prompt and returns the user's input. Style, folder, user, and host are all configurable.",
         "version_mod": "1.1",
         "L2Module":    True,
-        "alias_rules": "banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
+        "alias_rules": "/* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "manual": (
-            "moss [--style=STYLE] [--folder=DIR] [--user=NAME] [--host=HOST]\n\n"
-            "AVAILABLE COMMANDS & ARGUMENTS:\n"
-            "  --style=STYLE\n"
-            "    Prompt theme to use. Accepted values:\n"
-            "      Default     — Minimalist fish-shell style (default)\n"
-            "      Classic Unix — bash/zsh style with user@host prefix\n"
-            "      Frame       — Panelled IDE/dashboard style with clock\n"
-            "      64          — Powerline-like chevron segments\n"
-            "      Futur       — Cyberpunk/futuristic style with timestamp\n\n"
-            "  --folder=DIR\n"
-            "    Directory label displayed in the prompt. Defaults to core.trail.ROOT name.\n\n"
-            "  --user=NAME\n"
-            "    Username displayed in the prompt. Defaults to 'user'.\n\n"
-            "  --host=HOST\n"
-            "    Hostname displayed in the prompt. Defaults to 'raven'.\n\n"
-            "  (return value)\n"
-            "    Returns the user's input as a string.\n"
-            "    Returns 'KeyboardInterrupt' if the user presses Ctrl+C.\n"
-        )
+            "moss — Interactive prompt module with 5 Rich-styled themes  v1.1\n"
+            "================================================================\n"
+            "\n"
+            "SYNOPSIS\n"
+            "    moss [--style=STYLE] [--folder=DIR] [--user=NAME] [--host=HOST]\n"
+            "\n"
+            "DESCRIPTION\n"
+            "    Renders a styled terminal prompt and returns the user's input.\n"
+            "    The prompt style, folder, user, and host are configurable.\n"
+            "    If the user presses Ctrl+C, the module returns 'KeyboardInterrupt'.\n"
+            "\n"
+            "EXAMPLES\n"
+            "    moss\n"
+            "    moss --style=Classic Unix\n"
+            "    moss --style=Futur --user=root --host=terminal\n"
+        ),
     }
