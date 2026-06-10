@@ -310,7 +310,51 @@ def R_ECO3inf() -> dict:
         "version_mod": _VERSION,
         "alias_rules": "mule /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "L2Module":    True,
-        "manual":      _MANUAL_TEXT,
+        "manual": (
+            "mule — Remote file manager via GitHub raw  v1.3\n"
+            "===============================================\n"
+            "\n"
+            "SYNOPSIS\n"
+            "    mule install <fichier>\n"
+            "    mule desinstall <fichier>\n"
+            "    mule uninstall <fichier>\n"
+            "    mule update <fichier>\n"
+            "    mule update *\n"
+            "    mule help\n"
+            "\n"
+            "COMMANDS\n"
+            "    install <fichier>\n"
+            "        Télécharge et installe le fichier depuis le dépôt distant.\n"
+            "\n"
+            "    desinstall <fichier>\n"
+            "        Supprime le fichier du disque et de la base HiveFS.\n"
+            "\n"
+            "    uninstall <fichier>\n"
+            "        Alias de desinstall.\n"
+            "\n"
+            "    update <fichier>\n"
+            "        Retélécharge et écrase la version locale du fichier.\n"
+            "\n"
+            "    update *\n"
+            "        Scanne modules/ et core/, puis met à jour tous les fichiers\n"
+            "        qui existent aussi sur le dépôt distant.\n"
+            "\n"
+            "    help\n"
+            "        Affiche l'aide du module.\n"
+            "\n"
+            "STORED KEYS\n"
+            "    §sys:mule:list\n"
+            "        Liste des fichiers suivis par mule.\n"
+            "\n"
+            "    §sys:mule:installed:<filename>\n"
+            "        URL source du fichier installé.\n"
+            "\n"
+            "EXAMPLES\n"
+            "    mule install vine.py\n"
+            "    mule update vine.py\n"
+            "    mule update *\n"
+            "    mule desinstall test.py\n"
+        ),
     }
 
 
@@ -338,46 +382,4 @@ Exemples :
   mule update *
   mule update vine.py
   mule desinstall test.py
-"""
-
-_MANUAL_TEXT = """\
-# mule — Manuel complet v1.3
-
-## Description
-mule est un gestionnaire de fichiers distants pour R-ECO3.
-Il télécharge des fichiers depuis le dépôt GitHub :
-  https://raw.githubusercontent.com/Romaxololt/R-ECO3.5/main/
-
-## Commandes
-
-### mule install <fichier>
-Télécharge <fichier> et l'écrit sur le disque.
-Enregistre l'installation dans HiveFS.
-
-### mule desinstall <fichier>
-Supprime <fichier> du disque et de la base HiveFS.
-
-### mule update <fichier>
-Retélécharge <fichier> et écrase la version locale.
-
-### mule update *
-1. Scanne tous les fichiers présents dans modules/ et core/.
-2. Pour chacun, tente de récupérer la version distante sur GitHub.
-3. Si le fichier existe sur le repo → écrase la version locale + enregistre dans mule.
-4. Si 404 → ignoré silencieusement (fichier local uniquement).
-5. Affiche un résumé : mis à jour / ignorés / erreurs.
-
-## Résolution des chemins
-- `fichier.py`  → modules/fichier.py
-- `core.utils`  → core/utils
-
-## Clés HiveFS
-  §sys:mule:list                  → liste des fichiers suivis
-  §sys:mule:installed:<fichier>   → URL source
-
-## Dépendances
-  core.utils, core.hive, core.apix, core.trail, vine
-
-## Version
-  mule v1.3 — R-ECO3 v3.5.1b (Ant)
 """
