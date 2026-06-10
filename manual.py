@@ -75,11 +75,19 @@ def R_ECO3inf():
         "alias_rules": "manual /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "L2Module":    True,
         "manual": (
-            "manual <module>\n\n"
-            "AVAILABLE COMMANDS & ARGUMENTS:\n"
-            "  manual <module>\n"
+            "manual — Display the full manual for a RAVEN module  v1.0\n"
+            "=========================================================\n"
+            "\n"
+            "SYNOPSIS\n"
+            "    manual <module>\n"
+            "\n"
+            "DESCRIPTION\n"
             "    Displays the full manual of the given module.\n"
             "    Falls back to the help field if no manual is defined.\n"
-            "    Takes no additional arguments.\n"
-        )
+            "\n"
+            "EXAMPLES\n"
+            "    manual login\n"
+            "    manual moss\n"
+            "    manual mule\n"
+        ),
     }
