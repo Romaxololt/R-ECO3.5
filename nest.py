@@ -105,12 +105,10 @@ def R_ECO3(args, log_fn=print):
 
         if bmodule not in files:
             log_fn(f"[NEST] Module '{bmodule}' introuvable. (errno: 3)")
-            return  # BUG CORRIGÉ : return manquant
 
     else:
         if db["§sys:nest:status"] != "1":
             log_fn("[NEST] Statut inattendu. (errno: 9)")
-            return  # BUG CORRIGÉ : return manquant
 
         bmodule = db["§sys:global:boot:bmodule"]
         if debug:
@@ -129,8 +127,8 @@ def R_ECO3(args, log_fn=print):
         return
 
     log_fn(f"[NEST] Chargement de '{bmodule}'...")
-    bmodule = bmodule.replace(".py", "")
-    r = core.apix.R_ECO3("run " + bmodule, log_fn)
+    bmodule = bmodule.replace(".py", "") #type: ignore
+    r = core.apix.R_ECO3("run " + bmodule, log_fn) #type: ignore
 
     if r[1] != 0:
         log_fn("[NEST] Module de démarrage erreur. (errno: 12)")
@@ -154,31 +152,18 @@ def R_ECO3inf():
         "version_mod": "1.1",
         "L2Module":    False,
         "manual": (
-            "nest\n\n"
-            "AVAILABLE COMMANDS & ARGUMENTS:\n"
-            "  nest\n"
-            "    Runs the full boot sequence. Takes no arguments.\n\n"
-            "BOOT SEQUENCE:\n"
-            "  1. Verifies core module integrity (hive, utils, apix, spider).\n"
-            "  2. Validates database keys (version, magic, reco_version, codename).\n"
-            "  3. Resolves the boot module (§sys:global:boot:bmodule, defaults to raven.py).\n"
-            "  4. Checks boot module dependencies via spider.\n"
-            "  5. Starts a 2-second cancellable countdown before launch.\n"
-            "     Press any key (Windows) or Enter (Unix) to cancel.\n"
-            "  6. Loads and runs the boot module via core.apix.\n\n"
-            "ERROR CODES:\n"
-            "  errno 1  — core/trail.py not found\n"
-            "  errno 2  — raven.py not found in modules directory\n"
-            "  errno 3  — configured boot module file not found\n"
-            "  errno 5  — database magic mismatch\n"
-            "  errno 6  — incompatible R_ECO version\n"
-            "  errno 7  — incompatible codename\n"
-            "  errno 8  — missing required database keys\n"
-            "  errno 9  — unexpected nest status value\n"
-            "  errno 10 — missing core modules (corrupted ecosystem)\n"
-            "  errno 11 — boot module dependency check failed\n"
-            "  errno 12 — boot module execution error\n"
-            "  errno 13 — spider module not found\n"
-            "  warno 4  — unexpected database version (non-fatal)\n"
-        )
+            "nest — Bootloader for R-ECOSYSTEM  v1.1\n"
+            "=====================================\n"
+            "\n"
+            "SYNOPSIS\n"
+            "    nest\n"
+            "\n"
+            "DESCRIPTION\n"
+            "    Runs the full boot sequence for R-ECOSYSTEM.\n"
+            "    It validates the environment, checks database integrity, resolves the boot module,\n"
+            "    waits for a cancellable countdown, then launches the configured module.\n"
+            "\n"
+            "EXAMPLES\n"
+            "    nest\n"
+        ),
     }
