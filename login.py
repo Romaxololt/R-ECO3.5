@@ -129,16 +129,23 @@ def R_ECO3inf():
         "version_mod": "1.1",
         "L2Module":    False,
         "manual": (
-            "login [--uid=UID]\n\n"
-            "AVAILABLE COMMANDS & ARGUMENTS:\n"
-            "  login\n"
-            "    Opens an interactive account selector.\n"
-            "    Prompts for password, then returns a session ID.\n\n"
-            "  login --uid=UID\n"
-            "    Skips the account picker and attempts direct login for the given UID.\n\n"
-            "  login --uid=None\n"
-            "    Explicitly forces the account picker menu.\n\n"
-            "  (first launch)\n"
-            "    If no account exists in the database, creation is triggered automatically.\n"
-        )
+            "login — Account authentication and creation for RAVEN  v1.1\n"
+            "===========================================================\n"
+            "\n"
+            "SYNOPSIS\n"
+            "    login\n"
+            "    login [--uid=UID]\n"
+            "    login [--uid=None]\n"
+            "\n"
+            "DESCRIPTION\n"
+            "    Handles user login and account creation.\n"
+            "    If no UID is provided, an interactive account picker is shown.\n"
+            "    If --uid is provided, the module attempts a direct login.\n"
+            "    If no account exists, first-time account creation is triggered.\n"
+            "\n"
+            "EXAMPLES\n"
+            "    login\n"
+            "    login --uid=abc123\n"
+            "    login --uid=None\n"
+        ),
     }
