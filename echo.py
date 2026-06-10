@@ -16,9 +16,18 @@ def R_ECO3inf():
         "alias_rules": "test /* = echo test",
         "L2Module": True,
         "manual": (
-            "echo [args]\n\n"
-            "AVAILABLE COMMANDS & ARGUMENTS:\n"
-            "  echo [pos] [--key=value ...]\n"
+            "echo — Echo module  v1.1\n"
+            "========================\n"
+            "\n"
+            "SYNOPSIS\n"
+            "    echo [args...]\n"
+            "    echo [pos] [--key=value ...]\n"
+            "\n"
+            "DESCRIPTION\n"
             "    Prints all positional arguments and key-value pairs back to the log output.\n"
-        )
+            "\n"
+            "EXAMPLES\n"
+            "    echo hello world\n"
+            "    echo test --mode=debug --count=3\n"
+        ),
     }
