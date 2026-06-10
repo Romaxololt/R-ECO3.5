@@ -1,9 +1,9 @@
 from os import stat
-
+import core
+def  apix(args, logfn): return core.apix.R_ECO3(args, logfn)
 
 def R_ECO3(args, log_fn=print):
     state = {}
-    import core
     import rich
     import readline
     import rich.console
@@ -11,12 +11,14 @@ def R_ECO3(args, log_fn=print):
 
     state["console"] = rich.console.Console()
     state["questionary"] = questionary
-    printl = core.apix.R_ECO3("run bird")[1][1] # type: ignore
+    printl = apix("run bird", lambda x: x)[1][1] # type: ignore
+    
+    apix("run bee execute RAVEN_START -i", printl) #* BEE
 
-    if core.apix.R_ECO3("run banana banner", printl) != (0, (0, None)):
+    if apix("run banana banner", printl) != (0, (0, None)):
         return 1
 
-    rsid = core.apix.R_ECO3("run login", printl)
+    rsid = apix("run login", printl)
     if rsid[1][0] == 1: #type: ignore
         return 1
 
@@ -27,12 +29,12 @@ def R_ECO3(args, log_fn=print):
 
     usr = state["db"].get(f"§sys:user:sid:{sid}.uid")
     if usr is None:
-        core.apix.R_ECO3("run banana err --msg='Session not found'", printl)
+        apix("run banana err --msg='Session not found'", printl)
         return 1
 
     usrn = state["db"].get(f"§sys:user:uid:{usr}.name")
 
-    core.apix.R_ECO3(
+    apix(
         'run banana panel'
         f' --msg="Logged in as [bold blue]{usrn}[/bold blue]\ncookie: [dim]{sid}[/dim]"'
         ' --title=" Session"'
@@ -46,16 +48,16 @@ def R_ECO3(args, log_fn=print):
     # ─── Main loop ────────────────────────────────────────────────
     while True:
         #* BEE
-        core.apix.R_ECO3("run bee execute RAVEN_COMMAND_BEFORE -i", printl)
+        apix("run bee execute RAVEN_COMMAND_BEFORE -i", printl)
         
         style = state["db"].get(f"§sys:user:uid:{usr}.style", None)
         if style is None:
             state["db"].set(f"§sys:user:uid:{usr}.style", "Default")
         usrn = state["db"].get(f"§sys:user:uid:{usr}.name")
         
-        cwd = core.apix.R_ECO3("run tree cwd", lambda x: x)[1][1] #type: ignore
+        cwd = apix("run tree cwd", lambda x: x)[1][1] #type: ignore
 
-        cmd = core.apix.R_ECO3(
+        cmd = apix(
             f"run moss --style={style} --folder={cwd} --user={usrn} --host=R-ECO3", printl
         )
         cmd = str(cmd[1]).strip()
@@ -63,25 +65,25 @@ def R_ECO3(args, log_fn=print):
         if not cmd or cmd == "None":
             continue
         if cmd == "KeyboardInterrupt":
-            core.apix.R_ECO3("run banana rule --text='Goodbye'", printl)
+            apix("run banana rule --text='Goodbye'", printl)
             break
         if cmd in ("exit", "quit", "q"):
-            core.apix.R_ECO3("run banana rule --text='Goodbye'", printl)
+            apix("run banana rule --text='Goodbye'", printl)
             break
 
         dispatcher = state["db"].get("§sys:raven:dispatcher", "mycelium")
 
-        result = core.apix.R_ECO3(
+        result = apix(
             f'run {dispatcher} exe {cmd}', printl
         )
         
         if result[0] == 1:
-            core.apix.R_ECO3(
+            apix(
                 f"run banana err --msg='Module not found: [bold]{cmd}[/bold]'", #type: ignore
                 printl
             )
             
-        core.apix.R_ECO3("run bee execute RAVEN_COMMAND_AFTER -i", printl)
+        apix("run bee execute RAVEN_COMMAND_AFTER -i", printl) #* BEE
 
     return 0
 
@@ -106,19 +108,19 @@ def R_ECO3inf():
         "version_mod": "1.2",
         "L2Module":    False,
         "manual": (
-            "raven\n\n"
-            "AVAILABLE COMMANDS & ARGUMENTS:\n"
-            "  raven\n"
-            "    Starts the RAVEN interactive shell. Takes no arguments.\n\n"
-            "SHELL LOOP:\n"
-            "  Any input is dispatched as: spider <cmd> -vr --args=\"<args>\"\n"
-            "  exit / quit / q   — exits the shell gracefully\n"
-            "  Ctrl+C            — exits the shell gracefully\n\n"
-            "BOOT SEQUENCE:\n"
-            "  1. Displays the RAVEN banner via banana.\n"
-            "  2. Authenticates the user via the login module.\n"
-            "  3. Resolves session UID and username from the database.\n"
-            "  4. Displays a session panel with username and session cookie.\n"
-            "  5. Enters the interactive prompt loop via moss.\n"
-        )
+            "raven — Main RAVEN shell  v1.2\n"
+            "==============================\n"
+            "\n"
+            "SYNOPSIS\n"
+            "    raven\n"
+            "\n"
+            "DESCRIPTION\n"
+            "    Starts the RAVEN interactive shell.\n"
+            "    It shows the banner, authenticates the user, resolves the session,\n"
+            "    then enters the main prompt loop.\n"
+            "    Every command typed in the shell is dispatched through the active dispatcher.\n"
+            "\n"
+            "EXAMPLES\n"
+            "    raven\n"
+        ),
     }
