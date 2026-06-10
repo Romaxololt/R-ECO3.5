@@ -655,27 +655,79 @@ def _cmd_status(db, log_fn):
 #  Dispatch
 # ─────────────────────────────────────────────────────────────
 
-_HELP = """tree — Gestionnaire de fichiers R-ECO3 v{ver}
+_HELP =  """
+tree — Gestionnaire de fichiers R-ECO3  v1.0
+============================================
 
-Commandes :
-  tree mode [fs|hive]      Affiche ou change le mode courant
-  tree status              Résumé : mode, cwd fs, cwd hive
-  tree cwd                 Répertoire courant
-  tree cd <chemin>         Changer de répertoire
-  tree ls [chemin]         Lister le contenu
-  tree mkdir <nom>         Créer un dossier / namespace
-  tree rmdir <nom>         Supprimer un dossier vide / namespace vide
-  tree rm [-r] <cible>     Supprimer fichier/clé (récursif avec -r)
-  tree cp [-r] <src> <dst> Copier fichier/clé
-  tree mv <src> <dst>      Déplacer / renommer
-  tree touch <nom> [...]   Créer fichier/clé vide(s)
-  tree help                Cet écran
+SYNOPSIS
+    tree <commande> [args...]
+    tree mode [fs|hive]
+    tree status
+    tree cwd
+    tree cd <chemin>
+    tree ls [chemin]
+    tree mkdir <nom>
+    tree rmdir <nom>
+    tree rm [-r] <cible>
+    tree cp [-r] <src> <dst>
+    tree mv <src> <dst>
+    tree touch <nom> [...]
+    tree cat <cible> [...]
 
-Mode FS   : commandes sur le système de fichiers réel.
-Mode Hive : commandes sur la base HiveFS.
-            Les chemins utilisent ':' comme séparateur et débutent par §.
-            Exemple : §sys:raven:dispatcher
-""".format(ver=_VERSION)
+COMMANDS
+    mode [fs|hive]
+        Displays or changes the current mode.
+
+    status
+        Shows the current mode and both working directories.
+
+    cwd
+        Prints the current working directory for the active mode.
+
+    cd <chemin>
+        Changes the current directory or HiveFS namespace.
+
+    ls [chemin]
+        Lists files in FS mode or direct children in Hive mode.
+
+    mkdir <nom>
+        Creates a folder in FS mode or a namespace sentinel in Hive mode.
+
+    rmdir <nom>
+        Removes an empty folder in FS mode or an empty namespace in Hive mode.
+
+    rm [-r] <cible>
+        Removes files or keys. Use -r for recursive removal.
+
+    cp [-r] <src> <dst>
+        Copies files or HiveFS keys. Use -r for recursive copy.
+
+    mv <src> <dst>
+        Moves or renames files, keys, or subtrees.
+
+    touch <nom> [...]
+        Creates empty files in FS mode or empty keys in Hive mode.
+
+    cat <cible> [...]
+        Prints file contents in FS mode or key values / child listings in Hive mode.
+
+STORED KEYS
+    §_tree:cwd:fs
+        Stores the current working directory for FS mode.
+
+    §_tree:cwd:hive
+        Stores the current working namespace for Hive mode.
+
+    §_tree:mode
+        Stores the active mode value: fs or hive.
+
+EXAMPLES
+    tree mode hive
+    tree cwd
+    tree ls
+    tree cd §sys:user
+    tree touch test.txt
+""",
 
 
 def _simple_tokenize(s: str) -> list:
