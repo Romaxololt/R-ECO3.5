@@ -346,46 +346,53 @@ def R_ECO3inf():
         "version_mod": "1.1",
         "L2Module":    True,
         "alias_rules": "vine /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
-        "manual": """
-vine — Client HTTP R-ECO3
-==========================
-
-SYNOPSIS
-  vine <url> [options]
-  vine status
-
-DESCRIPTION
-  vine est un client HTTP minimaliste basé sur urllib (stdlib Python).
-  Il ne requiert aucune dépendance externe.
-
-OPTIONS
-  --method=VERB      Verbe HTTP : GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS
-                     Défaut : GET (POST si --data est fourni)
-  --data=<str>       Body de la requête (chaîne brute)
-  --header=K:V       Ajouter un header HTTP. Répétable.
-                     Si la valeur contient un espace, utiliser des guillemets :
-                       vine url "--header=Authorization:Bearer xyz"
-                     Ou sans espace dans la valeur (recommandé) :
-                       vine url --header=Authorization:Bearer_xyz
-  --json             Ajoute automatiquement Content-Type: application/json
-  --out=<fichier>    Sauvegarde le body de la réponse dans un fichier
-  --timeout=N        Timeout en secondes (défaut : 10)
-  --silent           Supprime tout affichage ; la valeur de retour est
-                     (0, <status_code>)
-  --no-status        Masque les lignes ✓/✗ et Status (le body reste affiché)
-  --debug            Affiche le parsing interne : url, method, headers, data
-
-EXEMPLES
-  vine https://httpbin.org/get
-  vine https://httpbin.org/post --data='{"x":1}' --json
-  vine https://httpbin.org/put --method=PUT --data=hello
-  vine https://example.com/file --out=page.html
-  vine https://httpbin.org/get --silent
-  vine https://api.github.com/user --header=Authorization:token ghp_xxx --debug
-  vine status
-
-RETOUR
-  (0, status_code) en succès
-  (1, message)     en erreur réseau ou de paramètre
-""",
+        "manual": (
+            "vine — Client HTTP R-ECO3  v1.1\n"
+            "==============================\n"
+            "\n"
+            "SYNOPSIS\n"
+            "    vine <url> [options]\n"
+            "    vine status\n"
+            "\n"
+            "DESCRIPTION\n"
+            "    vine is a lightweight HTTP client based on urllib from the Python standard library.\n"
+            "    It can send requests, print responses, save output to a file, and run silently when needed.\n"
+            "\n"
+            "OPTIONS\n"
+            "    --method=VERB\n"
+            "        HTTP method to use. Default is GET.\n"
+            "        If --data is provided and no method is set, the method becomes POST.\n"
+            "\n"
+            "    --data=<str>\n"
+            "        Request body.\n"
+            "\n"
+            "    --header=K:V\n"
+            "        Adds a custom header. Repeatable.\n"
+            "\n"
+            "    --json\n"
+            "        Adds Content-Type: application/json.\n"
+            "\n"
+            "    --out=<fichier>\n"
+            "        Saves the response body to a file.\n"
+            "\n"
+            "    --timeout=N\n"
+            "        Timeout in seconds. Default is 10.\n"
+            "\n"
+            "    --silent\n"
+            "        Suppresses output and returns only the HTTP status code.\n"
+            "\n"
+            "    --no-status\n"
+            "        Hides the status lines while keeping the body output.\n"
+            "\n"
+            "    --debug\n"
+            "        Prints internal parsing information.\n"
+            "\n"
+            "EXAMPLES\n"
+            "    vine https://httpbin.org/get\n"
+            "    vine https://httpbin.org/post --data='{\"x\":1}' --json\n"
+            "    vine https://example.com/file --out=page.html\n"
+            "    vine https://httpbin.org/get --silent\n"
+            "    vine https://api.github.com/user --header=Authorization:token ghp_xxx --debug\n"
+            "    vine status\n"
+        ),
     }
