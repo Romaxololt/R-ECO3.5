@@ -31,12 +31,13 @@ def tokenize(command: str) -> list[str]:
  
     return tokens
  
+ 
 def parse_command(command: str) -> tuple[list[str], dict[str, str | bool]]:
     """
     Parse une chaîne de commande et retourne :
       - positional (list[str])           : arguments sans tiret
       - kv         (dict[str, str|bool]) : arguments avec clé
-
+ 
     Formats supportés :
       run file.txt          → positional
       -v                    → {v: True}
@@ -46,97 +47,53 @@ def parse_command(command: str) -> tuple[list[str], dict[str, str | bool]]:
       --key                 → {key: True}
       --key=value           → {key: 'value'}
       --key value           → {key: 'value'}
-      --key=val ue          → {key: 'val ue'}   ← NOUVEAU : valeur avec espace
-      --key val ue          → {key: 'val ue'}   ← NOUVEAU : idem via token suivant
-
-    Règle de fin de valeur multi-token :
-      La capture s'arrête dès qu'on rencontre un token qui commence par '-'
-      ou qu'on atteint la fin de la chaîne.
-
-    Clés répétées :
-      --header=A --header=B → {header: ['A', 'B']}
     """
     tokens = tokenize(command)
     positional: list[str] = []
-    kv: dict[str, str | bool | list] = {}
-
-    def _store(k: str, v: str | bool) -> None:
-        """Stocke k→v ; si k existe déjà, convertit en liste."""
-        if k in kv:
-            existing = kv[k]
-            if isinstance(existing, list):
-                existing.append(v)
-            else:
-                kv[k] = [existing, v]
-        else:
-            kv[k] = v
-
-    def _collect_value(start: int) -> tuple[str, int]:
-        """
-        À partir de l'index `start`, collecte tous les tokens consécutifs
-        qui ne commencent pas par '-' et les joint avec un espace.
-        Retourne (valeur_assemblée, nouvel_index).
-        """
-        parts = []
-        j = start
-        while j < len(tokens) and not tokens[j].startswith('-'):
-            parts.append(tokens[j])
-            j += 1
-        return ' '.join(parts), j - 1  # j-1 car la boucle principale fera i+=1
-
+    kv: dict[str, str | bool] = {}
+ 
     i = 0
     while i < len(tokens):
         token = tokens[i]
-
+ 
         if token.startswith('--'):
-            body = token[2:]
-            if '=' in body:
-                key, _, val_start = body.partition('=')
-                # val_start peut être vide si le = est en fin de token
-                if val_start:
-                    # Vérifier si les tokens suivants prolongent la valeur
-                    if i + 1 < len(tokens) and not tokens[i + 1].startswith('-'):
-                        extra, i = _collect_value(i + 1)
-                        _store(key, val_start + ' ' + extra)
-                    else:
-                        _store(key, val_start)
-                else:
-                    # --key= sans valeur → capturer les tokens suivants
-                    if i + 1 < len(tokens) and not tokens[i + 1].startswith('-'):
-                        val, i = _collect_value(i + 1)
-                        _store(key, val)
-                    else:
-                        _store(key, True)
-            else:
-                # --key sans =
-                if i + 1 < len(tokens) and not tokens[i + 1].startswith('-'):
-                    val, i = _collect_value(i + 1)
-                    _store(body, val)
-                else:
-                    _store(body, True)
-
-        elif token.startswith('-'):
-            body = token[1:]
+            # ── long flag ────────────────────────────────────────
+            body = token[2:]                  # retire '--'
             if '=' in body:
                 key, _, value = body.partition('=')
-                _store(key, value)
+                kv[key] = value
+            else:
+                # regarder si le token suivant est une valeur
+                if i + 1 < len(tokens) and not tokens[i + 1].startswith('-'):
+                    i += 1
+                    kv[body] = tokens[i]
+                else:
+                    kv[body] = True
+ 
+        elif token.startswith('-'):
+            # ── flag(s) court(s) ─────────────────────────────────
+            body = token[1:]                  # retire '-'
+            if '=' in body:
+                key, _, value = body.partition('=')
+                kv[key] = value
             elif len(body) > 1:
                 # flags groupés : -ale → a, l, e booléens
                 for flag in body:
-                    _store(flag, True)
+                    kv[flag] = True
             else:
+                # flag seul : regarder si le token suivant est une valeur
                 if i + 1 < len(tokens) and not tokens[i + 1].startswith('-'):
-                    val, i = _collect_value(i + 1)
-                    _store(body, val)
+                    i += 1
+                    kv[body] = tokens[i]
                 else:
-                    _store(body, True)
-
+                    kv[body] = True
+ 
         else:
             positional.append(token)
-
+ 
         i += 1
-
-    return positional, kv  
+ 
+    return positional, kv
 
 def check_version(v_required, v_get):
     """
