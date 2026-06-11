@@ -1,3 +1,5 @@
+# _start.py : init module 
+
 import json
 import base64
 import time
@@ -97,7 +99,7 @@ def _animated_dots(label: str = "Configuring", steps: int = 3, delay: float = 0.
 
 
 def _banner(default_fp: str | None):
-    _box_top("R  E C O S Y S T E M")
+    _box_top("R - ECOSYSTEM")
     _box_row()
     _box_row("Bootstrap initialisation utility")
     _box_row(f"Version {VERSION}  —  {CODENAME}")
@@ -875,12 +877,10 @@ def R_ECO3(args, log_fn):
 
     session_rsa: dict = {"n": None, "e": None, "fp": None, "source": None}
 
-    # 1. Clé DEFAULT hardcodée
     def_n, def_e, def_fp = _load_default_pubkey()
     if def_n is not None:
         session_rsa = {"n": def_n, "e": def_e, "fp": def_fp, "source": "DEFAULT"}
 
-    # 2. DB (surcharge si pas de DEFAULT)
     if session_rsa["source"] != "DEFAULT":
         try:
             db    = _open_db(current_dir)
@@ -997,3 +997,4 @@ def R_ECO3inf():
         "L2Module": False,
         "manual": "_start [None]"
     }
+    
