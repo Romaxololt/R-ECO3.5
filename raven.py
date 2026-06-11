@@ -90,7 +90,7 @@ def R_ECO3(args, log_fn=print):
 
 def R_ECO3dep():
     return (("3.5.1b",), (
-        ("core.hive",  ("1.1",)),
+        ("core.hive", ("1.2",)),
         ("core.apix",  ("1.1",)),
         ("core.trail", ("1.1",)),
         ("banana",     ("1.1",)),
