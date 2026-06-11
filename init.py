@@ -37,7 +37,7 @@ def R_ECO3(args, log_fn=print):
 def R_ECO3dep():
     return (("3.5.1b",), (("core.apix", ("1.1",)),
                           ("banana", ("1.1",)),
-                          ("core.hive", ("1.1",)),))
+                          ("core.hive", ("1.2",)),))
 
 def R_ECO3inf():
     return {
