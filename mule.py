@@ -290,7 +290,7 @@ def R_ECO3dep() -> tuple:
         ("3.5.1b",),
         (
             ("core.utils",  ("1.1",)),
-            ("core.hive",   ("1.1",)),
+            ("core.hive", ("1.2",)),
             ("core.apix",   ("1.1",)),
             ("core.trail",  ("1.1",)),
             ("vine",        ("1.1",)),
