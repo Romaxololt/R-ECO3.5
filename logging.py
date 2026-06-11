@@ -86,7 +86,7 @@ def _cmd_write(tokens: list, log_fn):
         log_fn("[logger] write : message vide, rien à écrire.")
         return 1
 
-    level = (kv.get("level") or "INFO").upper()
+    level = str((kv.get("level") or "INFO")).upper()
     ts    = _fmt_timestamp()
     line  = f"[{ts}] [{level}] {message}"
 
@@ -322,7 +322,7 @@ def R_ECO3dep():
     return (
         ("3.5.1b",),
         (
-            ("core.hive",  ("1.1",)),
+            ("core.hive", ("1.2",)),
             ("core.apix",  ("1.1",)),
             ("core.utils", ("1.1",)),
             ("core.trail", ("1.0",)),
