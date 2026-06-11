@@ -1,7 +1,6 @@
 from pathlib import Path
 import os, sys, time
 
-
 def _lister_fichiers(dossier) -> list[str]:
     return [
         f for f in os.listdir(dossier)
@@ -49,6 +48,8 @@ def R_ECO3(args, log_fn=print):
         return
 
     import core
+    
+    #! Verification core
     
     if not (ROOT/"core"/"hive.py").exists() or not (ROOT/"core"/"utils.py").exists() or not (ROOT/"core"/"apix.py").exists() or not (ROOT/"modules"/"spider.py").exists():
         log_fn("[NEST] R-ECOSYSTEM corrompue (modules manquants). (errno: 10)")
@@ -134,15 +135,13 @@ def R_ECO3(args, log_fn=print):
         log_fn("[NEST] Module de démarrage erreur. (errno: 12)")
         return
 
-
 def R_ECO3dep():
     return (("3.5.1b",), (
-            ("core.hive", ("1.1",)),
+            ("core.hive", ("1.2",)),
             ("core.apix", ("1.1",)),
             ("core.utils", ("1.1",)),
             ("core.trail", ("1.1",)),
         ),)
-
 
 def R_ECO3inf():
     return {
