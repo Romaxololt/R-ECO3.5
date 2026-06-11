@@ -1651,7 +1651,7 @@ def R_ECO3dep():
     return (
         ("3.5.1b",),
         (
-            ("core.hive",  ("1.1",)),
+            ("core.hive", ("1.2",)),
             ("core.apix",  ("1.1",)),
             ("core.utils", ("1.1",)),
             ("core.trail", ()),
