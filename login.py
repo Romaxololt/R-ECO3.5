@@ -118,7 +118,7 @@ def R_ECO3dep():
                           ("core.apix", ("1.1",)),
                           ("core.utils", ("1.1",)),
                           ("core.trail", ("1.1",)),
-                          ("core.hive", ("1.1",)),
+                          ("core.hive", ("1.2",)),
                           ))
 
 def R_ECO3inf():
