@@ -17,7 +17,7 @@ import fnmatch
 #  Constantes
 # ─────────────────────────────────────────────────────────────
 
-_VERSION   = "1.0"
+_VERSION   = "2.1"
 _HIVE_SEP  = ":"
 _HIVE_ROOT = "§"
 
@@ -43,18 +43,18 @@ def _get_db():
 
 
 def _get_mode(db) -> str:
-    return db.get(_KEY_MODE, as_str=True) or "fs"
+    return db.get(_KEY_MODE) or "fs"
 
 
 def _get_cwd_fs(db) -> str:
-    stored = db.get(_KEY_CWD_FS, as_str=True)
+    stored = db.get(_KEY_CWD_FS)
     if stored and os.path.isdir(stored):
         return stored
     return os.path.expanduser("~")
 
 
 def _get_cwd_hive(db) -> str:
-    stored = db.get(_KEY_CWD_HIVE, as_str=True)
+    stored = db.get(_KEY_CWD_HIVE)
     return stored if stored else _HIVE_ROOT
 
 
@@ -422,7 +422,7 @@ def _hive_ls_cmd(db, args, log_fn):
 
     # Si la cible est elle-même une feuille (valeur sans enfants), cat implicite
     if has_val and not children:
-        val = db.get(target, as_str=True)
+        val = db.get(target)
         log_fn(f"{target} = {val!r}")
         return 0, []
 
@@ -435,12 +435,12 @@ def _hive_ls_cmd(db, args, log_fn):
         is_val = db.exists(child)
         if sub and is_val:
             # namespace + valeur propre : afficher la valeur entre crochets
-            val = db.get(child, as_str=True)
+            val = db.get(child)
             suffix = f"/  [{val!r}]"
         elif sub:
             suffix = "/"
         elif is_val:
-            val = db.get(child, as_str=True)
+            val = db.get(child)
             # Tronquer les valeurs longues
             display = (val[:40] + "…") if len(val) > 40 else val
             suffix = f"  {display!r}"
@@ -603,7 +603,7 @@ def _hive_cat(db, args, log_fn):
             log_fn(f"tree: cat: {key}: clé introuvable")
             return 1, f"introuvable : {key}"
         if has_val:
-            val = db.get(key, as_str=True)
+            val = db.get(key)
             if len(args) > 1:
                 log_fn(f"{key}:")
             log_fn(val)
@@ -758,17 +758,14 @@ def _simple_tokenize(s: str) -> list:
     return tokens
 
 
-def R_ECO3(args: str, log_fn=print):
+def R_ECO3(inp):
+    args = inp["args"]
+    log_fn = inp["logfn"]
+    db = inp["db"]
     tokens = _simple_tokenize(args.strip()) if args.strip() else []
 
     cmd = tokens[0].lower()
     rest = tokens[1:]
-
-    try:
-        db = _get_db()
-    except RuntimeError as e:
-        log_fn(f"[tree] Erreur HiveFS : {e}")
-        return 1, str(e)
 
     mode = _get_mode(db)
 
@@ -818,12 +815,10 @@ def R_ECO3(args: str, log_fn=print):
 
     if cmd not in dispatch:
         log_fn(f"tree: commande inconnue '{cmd}'. Tapez 'tree help'.")
-        db.close()
-        return 1, f"commande inconnue : {cmd}"
+        return {"status": 1, "value": "commande inconnue"}
 
-    result = dispatch[cmd]()
-    db.close()
-    return result
+    status, result = dispatch[cmd]()
+    return {"status": 0, "value": result}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -831,15 +826,10 @@ def R_ECO3(args: str, log_fn=print):
 # ─────────────────────────────────────────────────────────────
 
 def R_ECO3dep():
-    return (
-        ("3.5.1b",),
-        (
-            ("core.hive", ("1.2",)),
-            ("core.apix",  ("1.1",)),
-            ("core.utils", ("1.1",)),
-            ("core.trail", ("1.1",)),
-        )
-    )
+    return {
+        "reco": ["3.5.2b"],
+        "module": []
+    }
 
 
 def R_ECO3inf():
