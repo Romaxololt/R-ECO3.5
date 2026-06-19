@@ -14,8 +14,6 @@ from modules.banana import err
 
 def _load_module(name: str, path: Path | None = None):
     """Charge un module par nom, avec mise en cache dans sys.modules."""
-    if name in sys.modules:
-        return sys.modules[name]
 
     module_path = path or (MODULES_DIR / f"{name}.py")
     if not module_path.exists():
