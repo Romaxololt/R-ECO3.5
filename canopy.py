@@ -1,33 +1,35 @@
+# canopy 3.5.2 : Beta
 import core
 import core.apix as apix
 import core.trail as trail
 
-def _apix(arg, log_fn):
-    return core.apix.R_ECO3(arg, log_fn)
+def _apix(arg, log_fn, db=None):
+    payload = {"args": arg, "logfn": log_fn}
+    if db is not None:
+        payload["db"] = db
+    return core.apix.R_ECO3(payload)
 
-def R_ECO3(args, log_fn=print):
+def R_ECO3(inp):
+    args = inp["args"]
+    log_fn = inp["logfn"]
+    
     if args.strip():
         _apix(f"run banana err --msg='canopy takes no arguments'", log_fn)
         return 1
 
-    # ── Collect all L2 modules + their inf ───────────────────────────────
+    # ── Collect all L2 modules + their res["value"] ───────────────────────────────
     entries = []  # list of (keyword, desc, version, source_module)
-
-    for fname in sorted(trail.MODULES_DIR.iterdir()):
-        if fname.suffix != ".py" or fname.stem.startswith("_"):
-            continue
-        stem = fname.stem
+    for fname in _apix("listl2", log_fn)["value"]:
+        stem = fname
         try:
-            code, inf = _apix(f"inf {stem}", log_fn)
-            if code != 0 or not isinstance(inf, dict):
-                continue
-            if not inf.get("L2Module"):
+            res = _apix(f"inf {stem}", log_fn)
+            if res["status"] != 0 or not isinstance(res["value"], dict):
                 continue
 
-            name    = inf.get("name", stem)
-            desc    = inf.get("desc", "")
-            version = inf.get("version_mod", "")
-            raw_aliases = inf.get("alias_rules", "")
+            name    = res["value"].get("name", stem)
+            desc    = res["value"].get("desc", "")
+            version = res["value"].get("version_mod", "")
+            raw_aliases = res["value"].get("alias_rules", "")
 
             # Extract keywords from alias_rules
             keywords = set()
@@ -77,15 +79,19 @@ def R_ECO3(args, log_fn=print):
 
 
 def R_ECO3dep():
-    return (("3.5.1b",), (("core.apix", ("1.1",)), ("core.trail", ("1.1",)), ("banana", ("1.1",)),))
-
+    return {
+        "reco": ["3.5.2b"],
+        "module": [
+            {"banana": ["2.1"]},
+        ]
+    }
 
 def R_ECO3inf():
     return {
         "name": "canopy",
         "desc": "Lists all available commands (from alias_rules) with descriptions",
         "help": "canopy (no arguments)",
-        "version_mod": "1.0",
+        "version_mod": "2.1",
         "alias_rules": "canopy /* = canopy ||| canopy * = banana err --msg='This module cannot be run with arguments. Please refer to the manual for usage instructions.'",
         "L2Module": True,
         "manual": (
