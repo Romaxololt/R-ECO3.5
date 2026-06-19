@@ -4,6 +4,8 @@
 import sys
 import os
 import re
+import core.apix as apix
+import core.trail as trail
 
 # ---------------------------------------------------------------------------
 # Métadonnées
@@ -73,33 +75,18 @@ def R_ECO3inf():
 
 
 def R_ECO3dep():
-    return (
-        ("3.5.1b",),
-        (
-            ("core.hive",  ("1.1",)),
-            ("core.apix",  ("1.1",)),
-            ("core.utils", ("1.0",)),
-            ("core.trail", ("1.0",)),
-            ("banana",     ("1.1",)),
-            ("spider",     ("1.8",)),
-        )
-    )
+    return {
+        "reco": ["3.5.1b"],
+        "module": [
+            {"spider": ["2.1"]},
+            {"banana": ["2.1"]},
+            ],
+    }
 
 
 # ---------------------------------------------------------------------------
 # Chargement des modules core (lazy, pour éviter les imports circulaires)
 # ---------------------------------------------------------------------------
-
-def _get_core():
-    """Retourne (apix, hive_inst, trail, utils) ou lève RuntimeError."""
-    try:
-        import core.apix  as apix
-        import core.trail as trail
-        import core.utils as utils
-        db = __import__("core.hive", fromlist=["HiveFS"]).HiveFS(str(trail.DB_FILE))
-        return apix, db, trail, utils
-    except Exception as exc:
-        raise RuntimeError(f"Impossible de charger les modules core : {exc}")
 
 
 def _banana(apix, cmd, log_fn=print):
@@ -392,7 +379,7 @@ def _cmd_ver_reco(args_tokens, apix, db, trail, log_fn):
     _banana(apix, f'rule --text="dev ver reco → {new_ver}" --style="bold cyan"', log_fn)
 
     # 1. Récupérer la version actuelle en base
-    old_reco_ver = db.get("reco_version") or "?"
+    old_reco_ver = db.get("§sys:global:version.nest") or "?"
     _banana(apix, f'print --msg="Version actuelle en base : {old_reco_ver}"', log_fn)
 
     # 2. Lister les modules L2
@@ -457,7 +444,7 @@ def _cmd_ver_reco(args_tokens, apix, db, trail, log_fn):
 
     # 5. Mise à jour de la base HiveFS
     try:
-        db.set("reco_version", new_ver)
+        db.set("§sys:global:version.nest", new_ver)
         _banana(apix, f'ok --msg="Base HiveFS mise à jour : reco_version = {new_ver}"', log_fn)
     except Exception as exc:
         _banana(apix, f'err --msg="Échec mise à jour HiveFS : {exc}"', log_fn)
@@ -471,7 +458,6 @@ def _cmd_ver_reco(args_tokens, apix, db, trail, log_fn):
     _banana(apix, f'print --msg="Ignorés  : {len(skip_list)} — {skip_list}"', log_fn)
     _banana(apix, f'print --msg="Erreurs  : {len(err_list)} — {err_list}"', log_fn)
 
-    db.close()
     return 0
 
 
@@ -499,13 +485,13 @@ def _cmd_ver_module(args_tokens, apix, db, trail, log_fn):
 
     if not target_file.exists():
         _banana(apix, f'err --msg="Module cible introuvable : {target_mod}"', log_fn)
-        db.close()
+        
         return 1
 
     src_target = _read(target_file)
     if src_target is None:
         _banana(apix, 'err --msg="Impossible de lire le module cible."', log_fn)
-        db.close()
+        
         return 1
 
     # Détecter l'ancienne version dans version_mod
@@ -555,7 +541,7 @@ def _cmd_ver_module(args_tokens, apix, db, trail, log_fn):
 
     if not dependants:
         _banana(apix, f'print --msg="Aucun autre module ne déclare [{target_mod}] comme dépendance."', log_fn)
-        db.close()
+        
         return 0
 
     dep_names = [p.stem for p in dependants]
@@ -569,7 +555,7 @@ def _cmd_ver_module(args_tokens, apix, db, trail, log_fn):
     )
     if not selected_files:
         _banana(apix, 'print --msg="Aucun module sélectionné. Abandon."', log_fn)
-        db.close()
+        
         return 0
 
     # 5. Mode global : keep all / replace all / select
@@ -618,7 +604,7 @@ def _cmd_ver_module(args_tokens, apix, db, trail, log_fn):
     _banana(apix, f'print --msg="Ignorés  : {len(skip_list)} — {skip_list}"', log_fn)
     _banana(apix, f'print --msg="Erreurs  : {len(err_list)} — {err_list}"', log_fn)
 
-    db.close()
+    
     return 0
 
 
@@ -626,17 +612,15 @@ def _cmd_ver_module(args_tokens, apix, db, trail, log_fn):
 # Point d'entrée L2
 # ---------------------------------------------------------------------------
 
-def R_ECO3(args: str, log_fn=print):
+def R_ECO3(inp):
     """
     Syntaxe :
         dev ver reco <version>
         dev ver module <module> <version>
     """
-    try:
-        apix, db, trail, utils = _get_core()
-    except RuntimeError as exc:
-        log_fn(f"[dev] ERREUR core : {exc}")
-        return 1, str(exc)
+    args = inp["args"]
+    log_fn = inp["logfn"]
+    db = inp["db"]
 
     # Tokenisation simple (on retire le préfixe "dev" si spider l'a transmis)
     raw_tokens = args.strip().split()
@@ -647,7 +631,6 @@ def R_ECO3(args: str, log_fn=print):
     # Doit commencer par "ver"
     if not raw_tokens or raw_tokens[0] != "ver":
         _banana(apix, 'err --msg="Usage : dev ver reco <v> | dev ver module <mod> <v>"', log_fn)
-        db.close()
         return 1, "syntax error"
 
     sub = raw_tokens[1] if len(raw_tokens) > 1 else ""
@@ -662,5 +645,4 @@ def R_ECO3(args: str, log_fn=print):
         return code, None
 
     _banana(apix, f'err --msg="Sous-commande inconnue : {sub}. Attenu : reco | module"', log_fn)
-    db.close()
     return 1, "unknown subcommand"
