@@ -3,6 +3,7 @@ from rich.prompt import Prompt
 from rich.panel import Panel
 from rich.text import Text
 import datetime
+import core
 
 console = Console()
 
@@ -90,14 +91,13 @@ def _resolve_context() -> dict:
     """Valeurs par défaut issues de core.trail.ROOT."""
     ctx = {"folder": "raven", "user": "user", "host": "raven"}
     try:
-        import core
-        ctx["folder"] = str(core.trail.ROOT.name)   # dernier segment du chemin racine
+        ctx["folder"] = str(core.trail.ROOT.name)
     except Exception:
         pass
     return ctx
 
 
-def R_ECO3(args, log_fn=print):
+def R_ECO3(inp):
     """
     Point d'entrée appelé par raven via core.apix.R_ECO3("run moss ...", log_fn=printl).
 
@@ -112,8 +112,8 @@ def R_ECO3(args, log_fn=print):
 
     Retourne la saisie utilisateur (str).
     """
-    import core
-
+    args = inp["args"]
+    log_fn = inp["logfn"]
     # ── Parse des arguments via core.utils ───────────────────────
     _, kv = core.utils.parse_command(args if isinstance(args, str) else "")
     # ── Contexte : trail.ROOT en fallback, args en priorité ──────
@@ -144,27 +144,27 @@ def R_ECO3(args, log_fn=print):
     # ── Dispatch ──────────────────────────────────────────────────
     try:
         if style == 1:
-            return fn(log_fn=log_fn, folder=ctx["folder"], user=ctx["user"], host=ctx["host"])
+            result = fn(log_fn=log_fn, folder=ctx["folder"], user=ctx["user"], host=ctx["host"])
         elif style == 2:
-            return fn(log_fn=log_fn, folder=ctx["folder"],
+            result = fn(log_fn=log_fn, folder=ctx["folder"],
                     user=ctx["user"], host=ctx["host"])
         elif style == 3:
-            return fn(log_fn=log_fn, folder=ctx["folder"])
+            result = fn(log_fn=log_fn, folder=ctx["folder"])
         elif style == 4:
-            return fn(log_fn=log_fn, folder=ctx["folder"], user=ctx["user"])
+            result = fn(log_fn=log_fn, folder=ctx["folder"], user=ctx["user"])
         elif style == 5:
-            return fn(log_fn=log_fn, user=ctx["user"])
+            result = fn(log_fn=log_fn, user=ctx["user"])
         else:
-            return fn(log_fn=log_fn)
+            result = fn(log_fn=log_fn)
+        return {"status": 0, "value": result}
     except KeyboardInterrupt:
-        return "KeyboardInterrupt"
-
+        return {"status": 0, "value": "KeyboardInterrupt"}
 
 def R_ECO3dep():
-    return (("3.5.1b",),
-            (("core.trail", ("1.1",),),
-             ("core.utils", ("1.1",),),
-             ))
+    return {
+        "reco": ["3.5.2b"],
+        "module": []
+    }
 
 
 def R_ECO3inf(): 
@@ -172,7 +172,7 @@ def R_ECO3inf():
         "name":        "moss",
         "desc":        "Interactive prompt module with 5 Rich-styled themes",
         "help":        "Renders a styled terminal prompt and returns the user's input. Style, folder, user, and host are all configurable.",
-        "version_mod": "1.1",
+        "version_mod": "2.1",
         "L2Module":    True,
         "alias_rules": "/* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "manual": (
