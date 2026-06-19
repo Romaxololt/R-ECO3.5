@@ -1,9 +1,18 @@
-def R_ECO3(args, log_fn=print):
-    import core
+import core
+
+def apix(args, logfn=None, db=None, token=None):
+    payload = {"args": args, "logfn": logfn}
+    if db    is not None: payload["db"]    = db
+    if token is not None: payload["token"] = token
+    return core.apix.R_ECO3(payload)
+
+def R_ECO3(inp):
+    args = inp["args"]
+    log_fn = inp["logfn"]
     pos, kv = core.utils.parse_command(args)
 
     if not pos:
-        core.apix.R_ECO3(
+        apix(
             'run banana panel'
             ' --msg="Usage : [bold cyan]manual <module>[/bold cyan]"'
             ' --title="[bold cyan] Manual[/bold cyan]"'
@@ -17,14 +26,13 @@ def R_ECO3(args, log_fn=print):
     module = pos[0]
 
     try:
-        _, response_data = core.apix.R_ECO3(f"run spider {module} -in")
-        inf = response_data[1][0] #type: ignore
+        inf = apix(f"inf {module}")["value"]
     except Exception as e:
-        core.apix.R_ECO3(f"run banana err --msg='Failed to load module: {module}'", log_fn)
+        apix(f"run banana err --msg='Failed to load module: {module}'", log_fn)
         return 1
 
     if not isinstance(inf, dict):
-        core.apix.R_ECO3(f"run banana err --msg='No metadata found for: {module}'", log_fn)
+        apix(f"run banana err --msg='No metadata found for: {module}'", log_fn)
         return 1
 
     name    = inf.get("name",        module)
@@ -33,7 +41,7 @@ def R_ECO3(args, log_fn=print):
     manual  = inf.get("manual",      None)
     help_   = inf.get("help",        "")
 
-    core.apix.R_ECO3(
+    apix(
         f'run banana panel'
         f' --msg="{desc}"'
         f' --title="[bold cyan] {name}[/bold cyan]  [dim]v{version}[/dim]"'
@@ -50,20 +58,19 @@ def R_ECO3(args, log_fn=print):
     else:
         log_fn("  [dim]No manual available for this module.[/dim]")
 
-    core.apix.R_ECO3('run banana rule --style="blue dim"', log_fn)
+    apix('run banana rule --style="blue dim"', log_fn)
 
     return 0
 
 
 def R_ECO3dep():
-    return (
-        ("3.5.1b",),
-        (
-            ("core.trail", ("1.1",)),
-            ("spider",     ("1.8",)),
-            ("banana",     ("1.1",)),
-        )
-    )
+    return {
+        "reco": ["3.5.2b"],
+        "module": [
+            {"banana": ["2.1"]},
+            {"spider": ["2.1"]}
+        ]
+    }
 
 
 def R_ECO3inf():
@@ -71,7 +78,7 @@ def R_ECO3inf():
         "name":        "manual",
         "desc":        "Display the full manual for a RAVEN module",
         "help":        "Fetches and renders the manual entry of any module via spider. Falls back to the help field if no manual is defined.",
-        "version_mod": "1.0",
+        "version_mod": "2.1",
         "alias_rules": "manual /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "L2Module":    True,
         "manual": (
