@@ -248,7 +248,7 @@ def _parse_command(cmd):
 
 # ─── interface R-ECO3 ─────────────────────────────────────────────────────────
 
-def R_ECO3(args: str, log_fn=print):
+def R_ECO3(inp):
     """
     vine <url> [options]
     vine status
@@ -264,6 +264,10 @@ def R_ECO3(args: str, log_fn=print):
       --debug           Affiche le parsing interne (url, method, headers, data)
     """
     import core
+    
+    args = inp["args"]
+    log_fn = inp["logfn"]
+    
     positional, kv = core.utils.parse_command(args.strip())
 
     debug = bool(kv.get("debug", False))
@@ -328,22 +332,18 @@ def R_ECO3(args: str, log_fn=print):
 
     return _cmd_request(url, method, data, raw_h, is_json, out, timeout, silent, no_status, log_fn)
 
-
 def R_ECO3dep():
-    return (
-        ("3.5.1b",),
-        (
-            ("core.utils", ("1.1",)),
-        )
-    )
-
+    return {
+        "reco": ["3.5.2b"],
+        "module": []
+    }
 
 def R_ECO3inf():
     return {
         "name":        "vine",
         "desc":        "Client HTTP léger (urllib, sans dépendances externes)",
         "help":        "vine <url> [--method=] [--data=] [--header=K:V] [--json] [--out=] [--timeout=] [--silent] [--debug]",
-        "version_mod": "1.1",
+        "version_mod": "2.1",
         "L2Module":    True,
         "alias_rules": "vine /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "manual": (
