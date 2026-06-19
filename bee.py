@@ -1,5 +1,9 @@
-import time
+"""
+bee.py — automatic module generator
+"""
 
+import time
+import core
 
 SEP = "<RECO_SEP:=:>"
 
@@ -39,14 +43,15 @@ def _record_execution(db, name: str):
     db[f"§sys:bee:stats:{name}"] = f"{count}||{','.join(timestamps)}"
 
 
-def R_ECO3(args, log_fn=print):
-    import core
-
-    db = core.hive.HiveFS(str(core.trail.DB_FILE))
+def R_ECO3(inp):
+    log_fn = inp["logfn"]
+    args = inp["args"] 
+    db = inp["db"]
+    
     pos, kv = core.utils.parse_command(args)
 
     def B(cmd):
-        return core.apix.R_ECO3(f"run banana {cmd}", log_fn)
+        return core.apix.R_ECO3({"args": f"run banana {cmd}", "logfn":log_fn})
 
     verb = pos[0]
 
@@ -87,17 +92,17 @@ def R_ECO3(args, log_fn=print):
         module_args = parts[1] if len(parts) > 1 else ""
 
         result = core.apix.R_ECO3(
-            f'run spider {module_name} -vr --args="{module_args}"', log_fn
+            {"args": f'run spider {module_name} -vr --args="{module_args}"', "logfn": log_fn}
         )
         _record_execution(db, captor)
 
-        if isinstance(result, tuple) and result[0] != 0:
+        if isinstance(result, tuple) and result["status"] != 0:
             B(f"err --msg='Captor [bold cyan]{captor}[/bold cyan] failed'")
             return 1
 
     # ── list ──────────────────────────────────────────────────────
     elif verb == "list":
-        keys = [k for k in db.list()
+        keys = [k for k in list(db)
                 if k.startswith("§sys:bee:auto:") and k.endswith(".cmd")]
 
         if not keys:
@@ -231,17 +236,13 @@ def R_ECO3(args, log_fn=print):
     return 0
 
 def R_ECO3dep():
-    return (
-        ("3.5.1b",),
-        (
-            ("core.hive", ("1.2",)),
-            ("core.apix",  ("1.1",)),
-            ("core.utils", ("1.1",)),
-            ("core.trail", ("1.1",)),
-            ("banana",     ("1.1",)),
-            ("spider",     ("1.8",)),
-        ),
-    )
+    return {
+        "reco": ["3.5.2b"],
+        "module": [
+            {"banana": ["2.1"]},
+            {"spider": ["2.1"]},
+        ]
+    }
 
 
 def R_ECO3inf():
@@ -249,7 +250,7 @@ def R_ECO3inf():
         "name":        "bee",
         "desc":        "Captor-based command automation — bind, trigger, and track named commands",
         "help":        "Associates named captors with module commands and executes them on demand. Tracks execution history and exposes a named-entry registry with per-entry statistics.",
-        "version_mod": "1.2",
+        "version_mod": "2.1",
         "L2Module":    True,
         "alias_rules": "bee /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "manual": (
