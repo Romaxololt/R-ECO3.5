@@ -1,18 +1,22 @@
-def R_ECO3(args, log_fn=print):
+def R_ECO3(inp):
+    args = inp["args"]
+    log_fn = inp["logfn"]
     log_fn(args)
     return 0
-    
-def R_ECO3dep():
-    """Returns the minimal dependencies required for module initialization."""
-    return (("3.5.1b",), ((),))
 
+def R_ECO3dep():
+    return {
+        "reco": ["3.5.2b"],
+        "module": []
+    }
+    
 def R_ECO3inf():
     """Returns the metadata and help dictionary for RAVEN."""
     return {
         "name": "echo",
         "desc": "Echo — prints all provided arguments back to log output",
         "help": "Prints all provided positional arguments and key-value parameters back to the log output.",
-        "version_mod": "1.1",
+        "version_mod": "2.1",
         "alias_rules": "test /* = echo test",
         "L2Module": True,
         "manual": (
