@@ -14,6 +14,7 @@ from questionary import Style as QStyle
 import threading
 import time
 import itertools
+import core
 
 # ─── État interne ─────────────────────────────────────────────────────────────
 
@@ -72,14 +73,12 @@ def _bird():
     if _state["bird"] is not None:
         return _state["bird"]
     try:
-        import core.apix as apix
-        code, fn = apix.R_ECO3("run bird")[1] #type: ignore
-        if code == 0 and callable(fn):
+        fn = core.bird.R_ECO3(None)
+        if callable(fn):
             _state["bird"] = fn
             return fn
     except Exception:
         pass
-    # Fallback : print natif sans markup (bird indisponible)
     import builtins
     _state["bird"] = builtins.print
     return _state["bird"]
@@ -255,7 +254,9 @@ def loader(msg: str = "Loading…", seconds: float | None = None) -> Loader:
 
 # ─── R_ECO3 API ───────────────────────────────────────────────────────────────
 
-def R_ECO3(args: str, log_fn=null):
+def R_ECO3(inp):
+    log_fn = inp["logfn"]
+    args = inp["args"] 
     global _loader_instance
 
     set_log_fn(log_fn)
@@ -350,20 +351,17 @@ def R_ECO3(args: str, log_fn=null):
 
 def R_ECO3dep():
     """Retourne les dépendances minimales de la version système actuelle."""
-    return (
-        ("3.5.1b",),
-        (
-            ("core.utils", ("1.1",)),
-            ("bird",       ("1.2",)),   # bird requis pour l'affichage texte
-        ),
-    )
+    return {
+        "reco": ["3.5.2b"],
+        "module": []
+    }
 
 def R_ECO3inf():
     return {
         "name": "banana",
         "desc": "Banana RAVEN UI — display and interactions via Rich/Questionary",
         "help": "Graphical and interactive user interface module for RAVEN, designed to manage rich text displays, structured panels, animated loaders, and stylized user prompts.",
-        "version_mod": "1.1",
+        "version_mod": "2.1",
         "alias_rules": "banana /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "L2Module": True,
         "manual": (
