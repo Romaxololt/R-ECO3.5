@@ -503,15 +503,18 @@ _COMMANDS = {
     "aes_dec":     "aes_dec <hex_key> <hex_iv> <hex_ct>     — AES-256-CBC déchiffrement",
 }
 
-def R_ECO3(args: str, log_fn=print):
+def R_ECO3(inp):
     """
     Interface apix du module crypto.
 
-    Retourne (code, (status, valeur)) :
-        (0, (0, valeur))   — succès
-        (0, (1, msg))      — erreur applicative
-        (1, (1, msg))      — erreur fatale / commande inconnue
+    Retourne {"status": status, "value": value} :
+        {"status": 0, "value": valeur}   — succès
+        {"status": 1, "value": msg}      — erreur applicative / commande inconnue
     """
+
+    args   = inp["args"]
+    log_fn = inp["logfn"]
+
     parts = args.strip().split()
 
     cmd  = parts[0].lower()
@@ -521,126 +524,127 @@ def R_ECO3(args: str, log_fn=print):
     if cmd == "fingerprint":
         if not rest:
             log_fn("[crypto] Usage : fingerprint <n_int>")
-            return 0, (1, "missing arg")
+            return {"status": 1, "value": "missing arg"}
         try:
             n  = int(rest[0])
             fp = fingerprint(n)
             log_fn(fp)
-            return 0, (0, fp)
+            return {"status": 0, "value": fp}
         except Exception as ex:
             log_fn(f"[crypto] fingerprint error : {ex}")
-            return 0, (1, str(ex))
+            return {"status": 1, "value": str(ex)}
 
     # ── keygen ─────────────────────────────────────────────────
     elif cmd == "keygen":
         bits = int(rest[0]) if rest and rest[0].isdigit() else RSA_BITS
         try:
             n, e, d = generate_rsa_keypair(bits, log_fn)
-            return 0, (0, (n, e, d))
+            return {"status": 0, "value": (n, e, d)}
         except Exception as ex:
             log_fn(f"[crypto] keygen error : {ex}")
-            return 0, (1, str(ex))
+            return {"status": 1, "value": str(ex)}
 
     # ── set_key ────────────────────────────────────────────────
     elif cmd == "set_key":
         if not rest:
             log_fn("[crypto] Usage : set_key <passphrase> [bits]")
-            return 0, (1, "missing passphrase")
+            return {"status": 1, "value": "missing passphrase"}
         passphrase = rest[0]
         bits       = int(rest[1]) if len(rest) > 1 and rest[1].isdigit() else RSA_BITS
         try:
             n, e, d = set_key(passphrase, bits, log_fn)
-            return 0, (0, (n, e, d))
+            return {"status": 0, "value": (n, e, d)}
         except Exception as ex:
             log_fn(f"[crypto] set_key error : {ex}")
-            return 0, (1, str(ex))
+            return {"status": 1, "value": str(ex)}
 
     # ── encrypt ────────────────────────────────────────────────
     elif cmd == "encrypt":
         if len(rest) < 3:
             log_fn("[crypto] Usage : encrypt <n> <d> <hex_data>")
-            return 0, (1, "missing args")
+            return {"status": 1, "value": "missing args"}
         try:
-            n        = int(rest[0])
-            d        = int(rest[1])
-            data     = bytes.fromhex(rest[2])
-            blob     = encrypt_message(data, n, d)
+            n    = int(rest[0])
+            d    = int(rest[1])
+            data = bytes.fromhex(rest[2])
+            blob = encrypt_message(data, n, d)
             log_fn(blob.hex())
-            return 0, (0, blob)
+            return {"status": 0, "value": blob}
         except Exception as ex:
             log_fn(f"[crypto] encrypt error : {ex}")
-            return 0, (1, str(ex))
+            return {"status": 1, "value": str(ex)}
 
     # ── decrypt ────────────────────────────────────────────────
     elif cmd == "decrypt":
         if len(rest) < 3:
             log_fn("[crypto] Usage : decrypt <n> <e> <hex_blob>")
-            return 0, (1, "missing args")
+            return {"status": 1, "value": "missing args"}
         try:
-            n        = int(rest[0])
-            e        = int(rest[1])
-            blob     = bytes.fromhex(rest[2])
-            plain    = decrypt_message(blob, n, e)
+            n     = int(rest[0])
+            e     = int(rest[1])
+            blob  = bytes.fromhex(rest[2])
+            plain = decrypt_message(blob, n, e)
             log_fn(plain.hex())
-            return 0, (0, plain)
+            return {"status": 0, "value": plain}
         except Exception as ex:
             log_fn(f"[crypto] decrypt error : {ex}")
-            return 0, (1, str(ex))
+            return {"status": 1, "value": str(ex)}
 
     # ── aes_enc ────────────────────────────────────────────────
     elif cmd == "aes_enc":
         if len(rest) < 3:
             log_fn("[crypto] Usage : aes_enc <hex_key> <hex_iv> <hex_data>")
-            return 0, (1, "missing args")
+            return {"status": 1, "value": "missing args"}
         try:
             key  = bytes.fromhex(rest[0])
             iv   = bytes.fromhex(rest[1])
             data = bytes.fromhex(rest[2])
             ct   = aes_cbc_encrypt(key, iv, data)
             log_fn(ct.hex())
-            return 0, (0, ct)
+            return {"status": 0, "value": ct}
         except Exception as ex:
             log_fn(f"[crypto] aes_enc error : {ex}")
-            return 0, (1, str(ex))
+            return {"status": 1, "value": str(ex)}
 
     # ── aes_dec ────────────────────────────────────────────────
     elif cmd == "aes_dec":
         if len(rest) < 3:
             log_fn("[crypto] Usage : aes_dec <hex_key> <hex_iv> <hex_ct>")
-            return 0, (1, "missing args")
+            return {"status": 1, "value": "missing args"}
         try:
             key = bytes.fromhex(rest[0])
             iv  = bytes.fromhex(rest[1])
             ct  = bytes.fromhex(rest[2])
             pt  = aes_cbc_decrypt(key, iv, ct)
             log_fn(pt.hex())
-            return 0, (0, pt)
+            return {"status": 0, "value": pt}
         except Exception as ex:
             log_fn(f"[crypto] aes_dec error : {ex}")
-            return 0, (1, str(ex))
+            return {"status": 1, "value": str(ex)}
 
     # ── help ───────────────────────────────────────────────────
     elif cmd in ("help", "?"):
         for line in _COMMANDS.values():
             log_fn("  " + line)
-        return 0, (0, None)
+        return {"status": 0, "value": None}
 
     # ── commande inconnue ──────────────────────────────────────
     else:
         log_fn(f"[crypto] Commande inconnue : '{cmd}'. Tape 'help' pour la liste.")
-        return 1, (1, f"unknown command: {cmd}")
-
+        return {"status": 1, "value": f"unknown command: {cmd}"}
 
 def R_ECO3dep():
-    return (("3.5.1b",), ((),))
-
+    return {
+        "reco": ["3.5.2b"],
+        "module": []
+    }
 
 def R_ECO3inf():
     return {
         "name":        "rsa",
         "desc":        "Pure-Python RSA+AES+OAEP cryptographic primitives — no external dependencies",
         "help":        "Provides RSA key generation (random or deterministic), hybrid RSA+AES-256-CBC encryption/decryption, standalone AES-CBC operations, OAEP padding, and key fingerprinting. All ops available via core.apix.",
-        "version_mod": "1.0",
+        "version_mod": "2.1",
         "L2Module":    True,
         "alias_rules": "rsa /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
         "manual": (
