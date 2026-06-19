@@ -1,398 +1,303 @@
-"""
-vine.py — Module HTTP client pour R-ECO3
-Version : 1.1 · L2Module : True
-"""
+# vine.py — Client HTTP léger pour R-ECO3
+# Version 1.1 · Module L2 · Basé sur urllib (stdlib)
 
 import urllib.request
 import urllib.error
 import urllib.parse
-import json
-import os
-import time
+import json as _json_mod
 
 
-# ─── helpers ──────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+#  Métadonnées
+# ─────────────────────────────────────────────
 
-def _build_request(url, method, data, headers, is_json):
-    """Construit un urllib.request.Request."""
-    body = None
-
-    if data is not None:
-        if isinstance(data, str):
-            body = data.encode("utf-8")
-        else:
-            body = data
-
-    req = urllib.request.Request(url, data=body, method=method.upper())
-
-    # ─── Dans _build_request ──────────────────────────────────────────────────────
-    for h in headers:
-        if "=" in h:
-            k, v = h.split("=", 1)
-            req.add_header(k.strip(), v.strip())
-        elif ":" in h:
-            k, v = h.split(":", 1)
-            req.add_header(k.strip(), v.strip())
-
-    if is_json:
-        req.add_header("Content-Type", "application/json")
-
-    return req
-
-
-def _do_request(req, timeout):
-    """Exécute la requête. Retourne (status, headers, body_bytes) ou lève."""
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        status  = resp.status
-        headers = dict(resp.headers)
-        body    = resp.read()
-    return status, headers, body
-
-
-def _fmt_size(n):
-    if n < 1024:
-        return f"{n} B"
-    if n < 1024 ** 2:
-        return f"{n/1024:.1f} KB"
-    return f"{n/1024**2:.2f} MB"
-
-
-# ─── tokenizer interne (respecte les guillemets) ──────────────────────────────
-
-def _tokenize(s):
-    """
-    Découpe s en tokens en respectant les guillemets simples et doubles.
-    Contrairement à str.split(), les espaces à l'intérieur de guillemets
-    ne séparent pas les tokens.
-    """
-    tokens = []
-    current = []
-    in_quote = None
-    i = 0
-    while i < len(s):
-        c = s[i]
-        if in_quote:
-            if c == in_quote:
-                in_quote = None
-            else:
-                current.append(c)
-        elif c in ('"', "'"):
-            in_quote = c
-        elif c == ' ':
-            if current:
-                tokens.append(''.join(current))
-                current = []
-        else:
-            current.append(c)
-        i += 1
-    if current:
-        tokens.append(''.join(current))
-    return tokens
+def R_ECO3inf() -> dict:
+    return {
+        "name":        "vine",
+        "desc":        "Client HTTP léger (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS)",
+        "help":        (
+            "vine <url> [options]\n"
+            "vine status\n\n"
+            "Options :\n"
+            "  --method=VERB          GET (défaut), POST, PUT, PATCH, DELETE, HEAD, OPTIONS\n"
+            "  --data=<str>           Corps de la requête\n"
+            "  --header=K:V           Header HTTP (répétable)\n"
+            "  --json                 Ajoute Content-Type: application/json\n"
+            "  --out=<fichier>        Sauvegarde le body dans un fichier\n"
+            "  --timeout=N            Timeout en secondes (défaut : 10)\n"
+            "  --silent               Aucun affichage ; retourne {status:0, value:<code>}\n"
+            "  --no-status            Masque les lignes de statut, affiche le body\n"
+            "  --debug                Affiche le parsing interne"
+        ),
+        "version_mod": "2.1",
+        "L2Module":    True,
+        "manual": (
+            "# vine — Client HTTP\n\n"
+            "vine est un client HTTP léger sans dépendance externe, basé sur urllib.\n\n"
+            "## Synopsis\n\n"
+            "    vine <url> [options]\n"
+            "    vine status\n\n"
+            "## Options\n\n"
+            "  --method=VERB    Verbe HTTP : GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS\n"
+            "  --data=<str>     Corps de la requête (body)\n"
+            "  --header=K:V     Header HTTP (peut être répété plusieurs fois)\n"
+            "  --json           Ajoute automatiquement Content-Type: application/json\n"
+            "  --out=<fichier>  Sauvegarde la réponse dans un fichier\n"
+            "  --timeout=N      Timeout réseau en secondes (défaut : 10)\n"
+            "  --silent         Mode silencieux — retourne {status:0, value:<code_http>}\n"
+            "  --no-status      Masque le statut HTTP, affiche uniquement le body\n"
+            "  --debug          Affiche le parsing des arguments en interne\n\n"
+            "## Notes\n\n"
+            "Les erreurs HTTP 4xx/5xx n'entraînent PAS un statut de retour 1 — "
+            "le body d'erreur est affiché normalement.\n"
+            "Seules les erreurs réseau (timeout, DNS, etc.) retournent status=1.\n\n"
+            "## Exemples\n\n"
+            "    vine https://httpbin.org/get\n"
+            "    vine https://httpbin.org/post --data='{\"x\":1}' --json\n"
+            "    vine https://example.com/file --out=page.html\n"
+            "    vine https://httpbin.org/get --silent\n"
+            "    vine https://httpbin.org/delete --method=DELETE\n"
+            "    vine https://api.example.com --header=Authorization:Bearer token --header=X-Custom:val\n"
+        ),
+        "alias_rules": (
+            "/* = vine\n"
+            "* = vine /*"
+        ),
+    }
 
 
-# ─── commandes ────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+#  Dépendances
+# ─────────────────────────────────────────────
 
-def _cmd_request(url, method, data, headers, is_json, out_file, timeout, silent, no_status, log_fn):
-    """Commande principale : effectue la requête HTTP."""
-    try:
-        req    = _build_request(url, method, data, headers, is_json)
-        t0     = time.time()
-        status, resp_headers, body = _do_request(req, timeout)
-        elapsed = time.time() - t0
-    except urllib.error.HTTPError as e:
-        status   = e.code
-        resp_headers = dict(e.headers) if e.headers else {}
-        body     = e.read()
-        elapsed  = 0
-    except urllib.error.URLError as e:
-        log_fn(f"[vine] Erreur réseau : {e.reason}")
-        return 1, str(e.reason)
-    except TimeoutError:
-        log_fn(f"[vine] Timeout après {timeout}s")
-        return 1, "timeout"
-    except Exception as e:
-        log_fn(f"[vine] Erreur inattendue : {e}")
-        return 1, str(e)
-
-    # ── sauvegarde fichier ──
-    if out_file:
-        try:
-            with open(out_file, "wb") as f:
-                f.write(body)
-            if not silent:
-                log_fn(f"[vine] Réponse sauvegardée → {out_file} ({_fmt_size(len(body))})")
-        except OSError as e:
-            log_fn(f"[vine] Impossible d'écrire {out_file} : {e}")
-            return 1, str(e)
-
-    # ── mode silencieux ──
-    if silent:
-        return 0, status
-
-    # ── affichage ──
-    if not no_status:
-        status_icon = "✓" if 200 <= status < 300 else "✗"
-        log_fn(f"[vine] {status_icon} {method.upper()} {url}")
-        log_fn(f"       Status  : {status}  |  Taille : {_fmt_size(len(body))}  |  Temps : {elapsed*1000:.0f} ms")
-
-    ct = resp_headers.get("Content-Type", "")
-    if not out_file:
-        try:
-            text = body.decode("utf-8")
-        except UnicodeDecodeError:
-            text = body.decode("latin-1", errors="replace")
-
-        if "application/json" in ct:
-            try:
-                parsed = json.loads(text)
-                log_fn(json.dumps(parsed, indent=2, ensure_ascii=False))
-            except json.JSONDecodeError:
-                log_fn(text)
-        else:
-            log_fn(text)
-
-    return 0, status
-
-
-def _cmd_status(log_fn):
-    """Affiche le statut du module vine."""
-    log_fn("[vine] Module vine v1.1 — client HTTP urllib (no deps)")
-    log_fn("       Verbes supportés : GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS")
-    log_fn("       Encodage réponse : UTF-8 (fallback latin-1)")
-    log_fn("       Timeout défaut   : 10 s")
-    return 0, None
-
-def _parse_command(cmd):
-    """
-    Parser maison — gère :
-      - guillemets simples et doubles (espaces intérieurs préservés)
-      - --key=value  (value peut contenir des espaces si entre guillemets)
-      - --key value  (token suivant comme valeur, sauf bool flags)
-      - --flag       (booléen)
-      - -abc         (flags courts)
-      - positionnels
-      - clés répétées → liste
-    """
-    BOOL_FLAGS = {"json", "silent", "no-status", "debug", "h", "help"}
-
-    # ── tokenizer : respecte les guillemets simples et doubles ───────────────
-    tokens = []
-    i = 0
-    while i < len(cmd):
-        # sauter les espaces inter-tokens
-        while i < len(cmd) and cmd[i] == ' ':
-            i += 1
-        if i >= len(cmd):
-            break
-
-        tok = []
-        in_q = None
-        while i < len(cmd):
-            c = cmd[i]
-            if in_q:
-                if c == in_q:
-                    in_q = None       # fermeture du guillemet
-                else:
-                    tok.append(c)     # caractère à l'intérieur des guillemets
-            elif c in ('"', "'"):
-                in_q = c              # ouverture du guillemet
-            elif c == ' ':
-                break                 # fin du token (hors guillemets)
-            else:
-                tok.append(c)
-            i += 1
-
-        if tok:
-            tokens.append(''.join(tok))
-
-    # ── parser les tokens ────────────────────────────────────────────────────
-    pos = []
-    kv  = {}
-
-    def _store(k, v):
-        if k in kv:
-            if isinstance(kv[k], list):
-                kv[k].append(v)
-            else:
-                kv[k] = [kv[k], v]
-        else:
-            kv[k] = v
-
-    i = 0
-    while i < len(tokens):
-        t = tokens[i]
-
-        if t.startswith("--"):
-            key = t[2:]
-            if "=" in key:
-                k, v = key.split("=", 1)
-                _store(k, v)
-            elif key in BOOL_FLAGS:
-                _store(key, True)
-            elif i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
-                i += 1
-                _store(key, tokens[i])
-            else:
-                _store(key, True)
-
-        elif t.startswith("-") and len(t) > 1:
-            for c in t[1:]:
-                _store(c, True)
-
-        else:
-            pos.append(t)
-
-        i += 1
-
-    return pos, kv
-
-# ─── interface R-ECO3 ─────────────────────────────────────────────────────────
-
-def R_ECO3(inp):
-    """
-    vine <url> [options]
-    vine status
-
-    Options :
-      --method=VERB     Verbe HTTP (défaut : GET)
-      --data=<str>      Body de la requête
-      --header=K:V      Ajouter un header (répétable)
-      --json            Force Content-Type: application/json
-      --out=<fichier>   Sauvegarde la réponse dans un fichier
-      --timeout=N       Timeout en secondes (défaut : 10)
-      --silent          Pas d'affichage, retourne seulement le code HTTP
-      --debug           Affiche le parsing interne (url, method, headers, data)
-    """
-    import core
-    
-    args = inp["args"]
-    log_fn = inp["logfn"]
-    
-    positional, kv = core.utils.parse_command(args.strip())
-
-    debug = bool(kv.get("debug", False))
-
-    if debug:
-        log_fn(f"[vine:debug] args bruts    : {repr(args)}")
-        log_fn(f"[vine:debug] positional    : {positional}")
-        log_fn(f"[vine:debug] kv            : {kv}")
-
-    # ── vine status ──
-    if positional and positional[0].lower() == "status":
-        return _cmd_status(log_fn)
-
-    # ── aide ──
-    if kv.get("h") or kv.get("help"):
-        log_fn(R_ECO3.__doc__)
-        return 0, None
-
-    url = positional[0]
-
-    # ── paramètres ──
-    method    = str(kv.get("method", "GET")).upper()
-    data      = kv.get("data", None)
-    is_json   = bool(kv.get("json", False))
-    out       = kv.get("out", None)
-    no_status = bool(kv.get("no-status", False))
-    silent    = bool(kv.get("silent", False))
-    try:
-        timeout = float(kv.get("timeout", 10))
-    except (ValueError, TypeError):
-        log_fn("[vine] --timeout doit être un nombre")
-        return 1, "bad timeout"
-
-    # headers : --header peut apparaître plusieurs fois
-    raw_h = kv.get("header", [])
-    if isinstance(raw_h, str):
-        raw_h = [raw_h]
-    elif not isinstance(raw_h, list):
-        raw_h = list(raw_h) #type: ignore
-
-    if debug:
-        log_fn(f"[vine:debug] url           : {url}")
-        log_fn(f"[vine:debug] method        : {method}")
-        log_fn(f"[vine:debug] headers bruts : {raw_h}")
-        log_fn(f"[vine:debug] data          : {repr(data)}")
-        log_fn(f"[vine:debug] json          : {is_json}")
-        # Simuler le build du header pour voir ce qui sera envoyé
-        # ─── Dans R_ECO3, bloc debug ─────────────────────────────────────────────────
-        for h in raw_h:
-            if "=" in h:
-                k, v = h.split("=", 1)
-                log_fn(f"[vine:debug] header envoyé : {repr(k.strip())} → {repr(v.strip())}")
-            elif ":" in h:
-                k, v = h.split(":", 1)
-                log_fn(f"[vine:debug] header envoyé : {repr(k.strip())} → {repr(v.strip())}")
-            else:
-                log_fn(f"[vine:debug] header IGNORÉ (pas de séparateur) : {repr(h)}")
-
-    # Si data fourni sans méthode explicite → POST
-    if data is not None and "method" not in kv:
-        method = "POST"
-
-    return _cmd_request(url, method, data, raw_h, is_json, out, timeout, silent, no_status, log_fn)
-
-def R_ECO3dep():
+def R_ECO3dep() -> dict:
     return {
         "reco": ["3.5.2b"],
         "module": []
     }
 
-def R_ECO3inf():
-    return {
-        "name":        "vine",
-        "desc":        "Client HTTP léger (urllib, sans dépendances externes)",
-        "help":        "vine <url> [--method=] [--data=] [--header=K:V] [--json] [--out=] [--timeout=] [--silent] [--debug]",
-        "version_mod": "2.1",
-        "L2Module":    True,
-        "alias_rules": "vine /* = banana err --msg='This module cannot be run without arguments. Please refer to the manual for usage instructions.'",
-        "manual": (
-            "vine — Client HTTP R-ECO3  v1.1\n"
-            "==============================\n"
-            "\n"
-            "SYNOPSIS\n"
-            "    vine <url> [options]\n"
-            "    vine status\n"
-            "\n"
-            "DESCRIPTION\n"
-            "    vine is a lightweight HTTP client based on urllib from the Python standard library.\n"
-            "    It can send requests, print responses, save output to a file, and run silently when needed.\n"
-            "\n"
-            "OPTIONS\n"
-            "    --method=VERB\n"
-            "        HTTP method to use. Default is GET.\n"
-            "        If --data is provided and no method is set, the method becomes POST.\n"
-            "\n"
-            "    --data=<str>\n"
-            "        Request body.\n"
-            "\n"
-            "    --header=K:V\n"
-            "        Adds a custom header. Repeatable.\n"
-            "\n"
-            "    --json\n"
-            "        Adds Content-Type: application/json.\n"
-            "\n"
-            "    --out=<fichier>\n"
-            "        Saves the response body to a file.\n"
-            "\n"
-            "    --timeout=N\n"
-            "        Timeout in seconds. Default is 10.\n"
-            "\n"
-            "    --silent\n"
-            "        Suppresses output and returns only the HTTP status code.\n"
-            "\n"
-            "    --no-status\n"
-            "        Hides the status lines while keeping the body output.\n"
-            "\n"
-            "    --debug\n"
-            "        Prints internal parsing information.\n"
-            "\n"
-            "EXAMPLES\n"
-            "    vine https://httpbin.org/get\n"
-            "    vine https://httpbin.org/post --data='{\"x\":1}' --json\n"
-            "    vine https://example.com/file --out=page.html\n"
-            "    vine https://httpbin.org/get --silent\n"
-            "    vine https://api.github.com/user --header=Authorization:token ghp_xxx --debug\n"
-            "    vine status\n"
-        ),
-    }
+
+# ─────────────────────────────────────────────
+#  Helpers internes
+# ─────────────────────────────────────────────
+
+def _parse_args(raw: str) -> tuple:
+    """
+    Parse la chaîne brute d'arguments.
+    Retourne (positionnels: list[str], kv: dict).
+
+    Syntaxe gérée :
+      --key=value   → kv["key"] = "value"  (liste si répété)
+      --flag        → kv["flag"] = True
+      -v            → kv["v"] = True
+    Les clés répétées sont agrégées en list.
+    """
+    tokens = _tokenize(raw)
+    pos = []
+    kv  = {}
+
+    for tok in tokens:
+        if tok.startswith("--"):
+            inner = tok[2:]
+            if "=" in inner:
+                k, v = inner.split("=", 1)
+                if k in kv:
+                    if isinstance(kv[k], list):
+                        kv[k].append(v)
+                    else:
+                        kv[k] = [kv[k], v]
+                else:
+                    kv[k] = v
+            else:
+                kv[inner] = True
+        elif tok.startswith("-") and len(tok) > 1 and not tok[1:].lstrip("-"):
+            # tiret seul, ignorer
+            pos.append(tok)
+        elif tok.startswith("-") and len(tok) > 1:
+            for ch in tok[1:]:
+                kv[ch] = True
+        else:
+            pos.append(tok)
+
+    return pos, kv
+
+
+def _tokenize(s: str) -> list:
+    """Découpe en tokens en respectant les guillemets simples et doubles."""
+    tokens = []
+    current = []
+    in_quote = None
+
+    for ch in s:
+        if ch in ('"', "'") and in_quote is None:
+            in_quote = ch
+        elif ch == in_quote:
+            in_quote = None
+        elif ch == " " and in_quote is None:
+            if current:
+                tokens.append("".join(current))
+                current = []
+        else:
+            current.append(ch)
+
+    if current:
+        tokens.append("".join(current))
+
+    return tokens
+
+
+def _collect_headers(kv: dict) -> dict:
+    """
+    Extrait les headers depuis kv["header"].
+    Accepte une valeur unique ou une liste (--header répété).
+    Retourne un dict {nom: valeur}.
+    """
+    headers = {}
+    raw = kv.get("header")
+    if raw is None:
+        return headers
+
+    entries = raw if isinstance(raw, list) else [raw]
+    for entry in entries:
+        if ":" in entry:
+            k, v = entry.split(":", 1)
+            headers[k.strip()] = v.strip()
+
+    return headers
+
+
+def _do_request(url: str, method: str, data: bytes | None,
+                headers: dict, timeout: int) -> tuple:
+    """
+    Effectue la requête HTTP.
+    Retourne (status_code: int, response_headers: dict, body: bytes)
+    ou lève une exception réseau.
+    """
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, dict(resp.headers), resp.read()
+    except urllib.error.HTTPError as e:
+        # Erreurs 4xx/5xx : on lit quand même le body
+        try:
+            body = e.read()
+        except Exception:
+            body = b""
+        return e.code, dict(e.headers), body
+
+
+# ─────────────────────────────────────────────
+#  Point d'entrée L2
+# ─────────────────────────────────────────────
+
+def R_ECO3(inp: dict) -> dict:
+    """
+    Point d'entrée principal vine.
+
+    inp keys :
+      args   : str   — arguments bruts
+      logfn  : callable — fonction d'affichage
+      db     : HiveFS (optionnel)
+      token  : any   (optionnel)
+    """
+    args_raw = inp.get("args", "").strip()
+    log      = inp.get("logfn", print)
+
+    # ── sous-commande "status" ─────────────────
+    if args_raw.strip().lower() == "status":
+        log("[vine] v1.1 — client HTTP stdlib urllib — aucune dépendance externe")
+        log("Méthodes supportées : GET POST PUT PATCH DELETE HEAD OPTIONS")
+        return {"status": 0, "value": "ok"}
+
+    # ── parsing ───────────────────────────────
+    pos, kv = _parse_args(args_raw)
+
+    silent    = "silent"    in kv
+    no_status = "no-status" in kv or "no_status" in kv
+    debug     = "debug"     in kv
+    use_json  = "json"      in kv
+
+    method    = str(kv.get("method", "GET")).upper()
+    data_str  = kv.get("data",    None)
+    out_file  = kv.get("out",     None)
+    timeout   = int(kv.get("timeout", 10))
+
+    if not pos:
+        log("[vine] Erreur : URL manquante.")
+        log("Usage : vine <url> [--method=GET] [--data=...] [--json] [--silent] ...")
+        return {"status": 1, "value": "missing url"}
+
+    url = pos[0]
+
+    if debug:
+        log(f"[vine:debug] url={url!r}  method={method}  timeout={timeout}")
+        log(f"[vine:debug] data={data_str!r}  out={out_file!r}")
+        log(f"[vine:debug] kv={kv}")
+
+    # ── préparation headers ───────────────────
+    headers = _collect_headers(kv)
+
+    if use_json and "Content-Type" not in headers:
+        headers["Content-Type"] = "application/json"
+
+    # ── préparation body ──────────────────────
+    body_bytes: bytes | None = None
+    if data_str is not None:
+        body_bytes = data_str.encode("utf-8")
+        if method == "GET":
+            method = "POST"   # bascule implicite si body fourni sans --method
+
+    # ── requête ───────────────────────────────
+    try:
+        status_code, resp_headers, resp_body = _do_request(
+            url, method, body_bytes, headers, timeout
+        )
+    except urllib.error.URLError as exc:
+        reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
+        if not silent:
+            log(f"[vine] Erreur réseau : {reason}")
+        return {"status": 1, "value": reason}
+    except Exception as exc:
+        if not silent:
+            log(f"[vine] Erreur inattendue : {exc}")
+        return {"status": 1, "value": str(exc)}
+
+    # ── mode silent : retour immédiat ─────────
+    if silent:
+        return {"status": 0, "value": status_code}
+
+    # ── affichage statut ──────────────────────
+    if not no_status:
+        content_type = resp_headers.get("Content-Type", resp_headers.get("content-type", ""))
+        log(f"[vine] {method} {url}")
+        log(f"[vine] HTTP {status_code}  |  Content-Type: {content_type}")
+
+    # ── affichage / écriture body ─────────────
+    body_text: str | None = None
+    try:
+        body_text = resp_body.decode("utf-8")
+    except UnicodeDecodeError:
+        body_text = None   # binaire
+
+    if out_file:
+        try:
+            with open(out_file, "wb") as fh:
+                fh.write(resp_body)
+            if not no_status:
+                log(f"[vine] Body sauvegardé → {out_file} ({len(resp_body)} octets)")
+        except OSError as exc:
+            log(f"[vine] Impossible d'écrire {out_file!r} : {exc}")
+            return {"status": 1, "value": str(exc)}
+    else:
+        if body_text is not None:
+            # Tentative d'affichage JSON joliment formaté
+            try:
+                parsed = _json_mod.loads(body_text)
+                log(_json_mod.dumps(parsed, indent=2, ensure_ascii=False))
+            except (_json_mod.JSONDecodeError, ValueError):
+                log(body_text)
+        else:
+            log(f"[vine] Réponse binaire ({len(resp_body)} octets) — utilisez --out=<fichier> pour sauvegarder.")
+
+    return {"status": 0, "value": status_code}
