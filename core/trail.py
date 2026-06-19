@@ -21,12 +21,15 @@ def R_ECO3(args, log_fn=print):
     log_fn("Trail, provide R-ECOSYSTEM information.")
     
 def R_ECO3dep():
-    return (("3.5.1b",), ())
+    return {
+        "reco": ["3.5.2b"],
+        "module": [],
+    }
 
 def R_ECO3inf():
     return {
         "name": "trail",
         "desc": "Trail, give R-ECOSYSTEM information",
         "help": "No argument, it's an API",
-        "version_mod": "1.1",
+        "version_mod": "3.5.2b",
     }
