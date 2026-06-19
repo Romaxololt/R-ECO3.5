@@ -1,9 +1,7 @@
-# _start.py : init module 
+# _start.py : init module
 
 import json
-import base64
 import time
-import importlib.util
 import sys
 import math
 import struct
@@ -12,8 +10,13 @@ import os
 from pathlib import Path
 import readline
 
-VERSION  = "3.5.1b"
+VERSION  = "3.5.2b"
 CODENAME = "Ant"
+
+# ── Constantes DB (doivent matcher nest.py) ───────────────────────────────────
+_DB_VERSION  = "3.5.2b"
+_DB_CODENAME = "Ant"
+_DB_CHECKER  = "0" * 98
 
 R_ECO_DEFAULT_PUBKEY = {
     "magic":       "RCPUB1",
@@ -61,6 +64,7 @@ ERRNO = {
 def _err(code: str, detail: str = "") -> str:
     label = ERRNO.get(code, "Unknown error")
     return f"[{code}] {label}" + (f": {detail}" if detail else "")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Display helpers
@@ -119,20 +123,23 @@ def _banner(default_fp: str | None):
     _box_row("  set   <key> <value>        write to DB")
     _box_row("  get   <key>                read from DB")
     _box_row("  del   <key>                delete from DB")
+    _box_row("  reset                      reset hive database")
     _box_row("  list_keys                  list all DB keys")
     _box_row("  quit / exit                leave")
     _box_row()
     _box_bot()
     print()
 
-# ─── Constantes ───────────────────────────────────────────────────────────────
+
+# ─── Constantes crypto ────────────────────────────────────────────────────────
 _HEADER_MAGIC    = b"RCRYPT1"
-_HASH_LEN        = 32        # SHA-256
-_AES_KEY_LEN     = 32        # AES-256
+_HASH_LEN        = 32
+_AES_KEY_LEN     = 32
 _AES_BLOCK       = 16
 _RSA_BITS        = 4096
 _PBKDF2_ITER     = 100_000
 _PBKDF2_SALT_PFX = b"RomaCrypt-setkey-v1-"
+
 
 # ─── RSA arithmetic ───────────────────────────────────────────────────────────
 
@@ -183,8 +190,6 @@ def _miller_rabin(n: int, rounds: int = 20) -> bool:
             return False
     return True
 
-# ─── set_key — dérivation déterministe RSA depuis passphrase ──────────────────
-
 def _derive_seed(passphrase: str, bits: int) -> bytes:
     salt = _PBKDF2_SALT_PFX + str(bits).encode()
     return hashlib.pbkdf2_hmac('sha256', passphrase.encode('utf-8'),
@@ -217,7 +222,6 @@ def _det_random_prime(rng_read, bits: int) -> int:
             return candidate
 
 def _set_key(passphrase: str, bits: int = _RSA_BITS):
-    """Dérive (n, e, d) de façon déterministe depuis une passphrase."""
     print(f"[*] Dérivation PBKDF2-SHA256 ({_PBKDF2_ITER:,} itérations)...")
     seed = _derive_seed(passphrase, bits)
     print(f"[*] Expansion RSA-{bits} procédurale en cours...")
@@ -240,6 +244,7 @@ def _set_key(passphrase: str, bits: int = _RSA_BITS):
     print(f"[+] Clés dérivées en {attempt} tentative(s).  RSA-{bits}")
     print(f"[+] Fingerprint : {fp}")
     return n, e, d
+
 
 # ─── OAEP ─────────────────────────────────────────────────────────────────────
 
@@ -271,6 +276,7 @@ def _oaep_decode(em: bytes, k: int, label: bytes = b"RomaCrypt") -> bytes:
     rest = DB[hLen:]
     idx  = rest.index(b"\x01")
     return rest[idx + 1:]
+
 
 # ─── AES-256-CBC (stdlib seulement) ───────────────────────────────────────────
 
@@ -374,6 +380,7 @@ def _aes_cbc_decrypt(key: bytes, iv: bytes, ciphertext: bytes) -> bytes:
         raise ValueError("Padding PKCS#7 invalide — données corrompues ou clé incorrecte")
     return pt[:-pad]
 
+
 # ─── Déchiffrement hybride RSA-OAEP + AES-CBC ─────────────────────────────────
 
 def _const_eq(a: bytes, b: bytes) -> bool:
@@ -392,22 +399,18 @@ def _rsa_oaep_decrypt_key(ciphertext: bytes, n: int, e: int) -> bytes:
     return _oaep_decode(em, k)
 
 def _decrypt_message(blob: bytes, n: int, e: int) -> bytes:
-    """Déchiffrement avec clé publique (n, e) — équivalent de romacrypt.decrypt_message."""
     if not blob.startswith(_HEADER_MAGIC):
         raise ValueError(
             "Magic RCRYPT1 absent en tête de blob — "
             "fichier tronqué, corrompu, ou pas un paquet RomaCrypt"
         )
     pos = len(_HEADER_MAGIC)
-
     k        = struct.unpack(">I", blob[pos:pos+4])[0]; pos += 4
     enc_key  = blob[pos:pos+k];                          pos += k
     iv       = blob[pos:pos+_AES_BLOCK];                 pos += _AES_BLOCK
     hmac_val = blob[pos:pos+_HASH_LEN];                  pos += _HASH_LEN
     ct       = blob[pos:]
-
     aes_key  = _rsa_oaep_decrypt_key(enc_key, n, e)
-
     hmac_key = hashlib.sha256(aes_key + b"hmac").digest()
     expected = hashlib.sha256(hmac_key + enc_key + iv + ct).digest()
     if not _const_eq(hmac_val, expected):
@@ -415,16 +418,61 @@ def _decrypt_message(blob: bytes, n: int, e: int) -> bytes:
             "HMAC invalide — les données ont été altérées en transit "
             "ou la clé publique ne correspond pas à la clé privée utilisée pour chiffrer"
         )
-
     return _aes_cbc_decrypt(aes_key, iv, ct)
 
 def make_fingerprint(n: int) -> str:
     nb = n.to_bytes((n.bit_length() + 7) // 8, 'big')
     return hashlib.sha256(nb).hexdigest()[:16]
 
-# Alias interne (utilisé partout dans ce fichier)
 _make_fingerprint = make_fingerprint
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Loaders
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _ensure_syspath(current_dir: Path):
+    root_str = str(current_dir)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+
+def _load_flatKV(current_dir: Path):
+    _ensure_syspath(current_dir)
+    try:
+        from core.hive import HiveFS
+        return HiveFS
+    except ImportError as exc:
+        raise RuntimeError(_err("E008", str(exc))) from exc
+
+def _load_apix(current_dir: Path):
+    _ensure_syspath(current_dir)
+    try:
+        from core import apix
+        if not hasattr(apix, "R_ECO3"):
+            raise RuntimeError(_err("E020", "'R_ECO3' missing from apix"))
+        return apix
+    except ImportError as exc:
+        raise RuntimeError(_err("E020", str(exc))) from exc
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DB helpers
+#
+#  RÈGLE : toute ouverture de DB doit utiliser le context manager  "with"
+#          pour garantir le flush+close, même en cas d'exception.
+#          _open_db() n'est PLUS utilisé seul — utiliser _db_ctx() à la place.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _db_path(current_dir: Path) -> Path:
+    return current_dir / "data" / "data.hive"
+
+def _db_ctx(current_dir: Path):
+    """Retourne un context manager sur la DB. Lève RuntimeError si absente."""
+    FlatKV = _load_flatKV(current_dir)
+    p = _db_path(current_dir)
+    if not p.exists():
+        raise RuntimeError(_err("E001", str(p)))
+    return FlatKV(str(p))
 
 def _load_default_pubkey() -> tuple[int | None, int | None, str | None]:
     if R_ECO_DEFAULT_PUBKEY is None:
@@ -440,7 +488,6 @@ def _load_default_pubkey() -> tuple[int | None, int | None, str | None]:
     except Exception:
         return None, None, None
 
-
 def _load_pubkey_from_file(path: str) -> tuple[int, int, str]:
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -454,19 +501,6 @@ def _load_pubkey_from_file(path: str) -> tuple[int, int, str]:
     except (KeyError, ValueError) as exc:
         raise ValueError(_err("E027", str(exc))) from exc
 
-def extract_metadata(module_path: Path) -> tuple[str, str]:
-    if not module_path.exists():
-        return "Unknown", "Unknown"
-    spec = importlib.util.spec_from_file_location("_dynamic_meta", str(module_path))
-    if not spec or not spec.loader:
-        return "Unknown", "Unknown"
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        return "Unknown", "Unknown"
-    return getattr(module, "VERSION", "Unknown"), getattr(module, "CODENAME", "Unknown")
-
 def _resolve_module_path(root: Path, module_name: str) -> Path | None:
     try:
         if module_name.startswith("core."):
@@ -477,29 +511,9 @@ def _resolve_module_path(root: Path, module_name: str) -> Path | None:
         return None
 
 
-def _load_flatKV(current_dir: Path):
-    hive_path = current_dir / "core" / "hive.py"
-    if not hive_path.exists():
-        raise RuntimeError(_err("E008", f"'{hive_path}' not found"))
-    spec = importlib.util.spec_from_file_location("core.hive", str(hive_path))
-    if not spec or not spec.loader:
-        raise RuntimeError(_err("E008", "importlib could not build a spec"))
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except Exception as exc:
-        raise RuntimeError(_err("E008", str(exc))) from exc
-    if not hasattr(module, "HiveFS"):
-        raise RuntimeError(_err("E008", "'HiveFS' missing from hive.py"))
-    return module.HiveFS
-
-
-def _open_db(current_dir: Path):
-    FlatKV  = _load_flatKV(current_dir)
-    db_path = current_dir / "data" / "data.hive"
-    if not db_path.exists():
-        raise RuntimeError(_err("E001", str(db_path)))
-    return FlatKV(str(db_path))
+# ══════════════════════════════════════════════════════════════════════════════
+#  Commands
+# ══════════════════════════════════════════════════════════════════════════════
 
 _RECO_FORBIDDEN = {"install", "uninstall", "quit", "exit"}
 _HELP_REPL = ("install [<file>]  |  uninstall  |  set_rsa_key  |  load_pubkey  |  "
@@ -511,9 +525,7 @@ def _cmd_set(current_dir: Path, raw_cmd: str, *, prefix: str = "") -> bool:
     parts = raw_cmd.split(maxsplit=2)
     if len(parts) < 3:
         _fail("E011"); print(f"{prefix}       Usage:  set <key> <value>"); return False
-
     key, value = parts[1], parts[2]
-
     if key == "_start":
         cfg_path = current_dir / "R_ECO.cfg"
         try:
@@ -531,23 +543,20 @@ def _cmd_set(current_dir: Path, raw_cmd: str, *, prefix: str = "") -> bool:
         except OSError as exc:
             _fail("E012", str(exc)); return False
         return True
-
     try:
-        db = _open_db(current_dir)
+        with _db_ctx(current_dir) as db:
+            db.set(key, value)
+        print(f"{prefix}  ✔  db.set  {key!r}  =  {value!r}")
+        return True
     except RuntimeError as exc:
         _fail("E008", str(exc)); return False
-    db.set(key, value)
-    print(f"{prefix}  ✔  db.set  {key!r}  =  {value!r}")
-    return True
 
 
 def _cmd_get(current_dir: Path, raw_cmd: str, *, prefix: str = "") -> bool:
     parts = raw_cmd.split(maxsplit=1)
     if len(parts) < 2:
         _fail("E017"); print(f"{prefix}       Usage:  get <key>"); return False
-
     key = parts[1].strip()
-
     if key == "_start":
         cfg_path = current_dir / "R_ECO.cfg"
         if cfg_path.exists():
@@ -561,20 +570,18 @@ def _cmd_get(current_dir: Path, raw_cmd: str, *, prefix: str = "") -> bool:
         else:
             print(f"{prefix}  ·  '_start'  not set  (R_ECO.cfg absent)")
         return True
-
     try:
-        db = _open_db(current_dir)
+        with _db_ctx(current_dir) as db:
+            if not db.exists(key):
+                print(f"{prefix}  ✖  {_err('E016', repr(key))}"); return False
+            value     = db.get(key)
+            type_name = type(value).__name__
+            display   = (value[:64].hex() + f"…  ({len(value)} bytes)"
+                         if isinstance(value, bytes) and len(value) > 64 else repr(value))
+        print(f"{prefix}  ✔  {key!r}  =  {display}  [{type_name}]")
+        return True
     except RuntimeError as exc:
         _fail("E008", str(exc)); return False
-    if not db.exists(key):
-        print(f"{prefix}  ✖  {_err('E016', repr(key))}"); return False
-
-    value     = db.get(key)
-    type_name = type(value).__name__
-    display   = (value[:64].hex() + f"…  ({len(value)} bytes)"
-                 if isinstance(value, bytes) and len(value) > 64 else repr(value))
-    print(f"{prefix}  ✔  {key!r}  =  {display}  [{type_name}]")
-    return True
 
 
 def _cmd_del(current_dir: Path, raw_cmd: str, *, prefix: str = "") -> bool:
@@ -583,37 +590,71 @@ def _cmd_del(current_dir: Path, raw_cmd: str, *, prefix: str = "") -> bool:
         _fail("E018"); print(f"{prefix}       Usage:  del <key>"); return False
     key = parts[1].strip()
     try:
-        db = _open_db(current_dir)
+        with _db_ctx(current_dir) as db:
+            if not db.delete(key):
+                print(f"{prefix}  ✖  {_err('E016', repr(key))}"); return False
+        print(f"{prefix}  ✔  deleted  {key!r}")
+        return True
     except RuntimeError as exc:
         _fail("E008", str(exc)); return False
-    if not db.delete(key):
-        print(f"{prefix}  ✖  {_err('E016', repr(key))}"); return False
-    print(f"{prefix}  ✔  deleted  {key!r}")
-    return True
 
 
 def _cmd_list_keys(current_dir: Path, *, prefix: str = "") -> bool:
     try:
-        db = _open_db(current_dir)
+        with _db_ctx(current_dir) as db:
+            keys = db.list_keys()
+            st   = db.stats()
+        if not keys:
+            print(f"{prefix}  ·  Database is empty."); return True
+        print(f"{prefix}  ·  {len(keys)} key(s)  (frag: {st['fragmentation']})\n")
+        for i, key in enumerate(keys, 1):
+            print(f"{prefix}  {i:>4}.  key={key!r}")
+        return True
     except RuntimeError as exc:
         _fail("E008", str(exc)); return False
-    keys = db.list()
-    if not keys:
-        print(f"{prefix}  ·  Database is empty."); return True
-    st = db.stats()
-    print(f"{prefix}  ·  {len(keys)} key(s)  (live: {st['live_size']} B, "
-          f"garbage: {st['garbage_ratio']:.0%})\n")
-    for i, key in enumerate(keys, 1):
-        key_hash = next((h for h, k in db.key_map.items() if k == key), None)
-        entry    = db.index.get(key_hash) if key_hash else None
-        if entry:
-            ts   = time.strftime("%Y-%m-%d %H:%M:%S",
-                                 time.localtime(entry.timestamp // 1_000_000))
-            comp = "  [z]" if entry.flags & 0x02 else ""
-            print(f"{prefix}  {i:>4}.  key={key!r}  size={entry.size:>6} B  ts={ts}{comp}")
-        else:
-            print(f"{prefix}  {i:>4}.  key={key!r}")
+
+
+def _cmd_run(current_dir: Path, raw_cmd: str, *, prefix: str = "") -> bool:
+    parts = raw_cmd.split(maxsplit=2)
+    if len(parts) < 2:
+        _fail("E021"); print(f"{prefix}       Usage:  run <module> [args]"); return False
+    module   = parts[1]
+    run_args = parts[2] if len(parts) > 2 else ""
+    try:
+        apix = _load_apix(current_dir)
+    except RuntimeError as exc:
+        _fail("E020", str(exc)); return False
+    print(f"{prefix}  »  apix → run {module!r}" + (f"  args={run_args!r}" if run_args else ""))
+    result = apix.R_ECO3({"args": f"run {module} {run_args}".strip(), "logfn": print})
+    if result["status"] != 0:
+        print(f"{prefix}  ✖  {module} exited with error: {result['value']}"); return False
+    print(f"{prefix}  ✔  {module} exited ({result['value']})")
     return True
+
+
+def _cmd_uninstall(current_dir: Path):
+    import shutil
+    _box_top("UNINSTALL")
+    _box_row(f"Target : {current_dir}")
+    _box_bot()
+    print()
+    removed, skipped, failed = [], [], []
+    for idx, folder in enumerate(["core", "modules", "data"], 1):
+        prefix   = f"  [{idx}/3]"
+        dir_path = current_dir / folder
+        if not dir_path.exists():
+            print(f"{prefix}  ·  /{folder}  (already absent)"); skipped.append(folder); continue
+        try:
+            shutil.rmtree(dir_path)
+            print(f"{prefix}  ✔  /{folder}  removed"); removed.append(folder)
+        except OSError as exc:
+            print(f"{prefix}  ✖  /{folder}  —  {_err('E007', str(exc))}"); failed.append(folder)
+    cfg = current_dir / "R_ECO.cfg"
+    if cfg.exists():
+        try: cfg.unlink(); _ok("R_ECO.cfg removed")
+        except OSError: pass
+    print(f"\n  Removed: {len(removed)}  Skipped: {len(skipped)}  Failed: {len(failed)}\n")
+
 
 def _install_rcpkg1(current_dir: Path, data: dict,
                     rsa_n: int | None, rsa_e: int | None) -> tuple[int, list]:
@@ -626,7 +667,7 @@ def _install_rcpkg1(current_dir: Path, data: dict,
     packet_fp  = data.get("fingerprint", "")
 
     if packet_fp and packet_fp != session_fp:
-        _warn(f"Fingerprint mismatch !")
+        _warn("Fingerprint mismatch !")
         _warn(f"  Paquet  : {packet_fp}")
         _warn(f"  Session : {session_fp}")
         _warn("Déchiffrement probable en échec — vérifiez la passphrase.")
@@ -648,59 +689,52 @@ def _install_rcpkg1(current_dir: Path, data: dict,
     mod_ok, mod_fail = 0, []
 
     for idx, (fname, meta) in enumerate(files.items(), 1):
-        prefix    = f"  [{idx:>2}/{total}]"
+        pfx       = f"  [{idx:>2}/{total}]"
         file_path = _resolve_module_path(current_dir, fname)
         if file_path is None:
             mod_fail.append(fname); continue
-
         hex_data = meta.get("data", "") if isinstance(meta, dict) else str(meta)
-
         try:
             blob      = bytes.fromhex(hex_data)
             plaintext = _decrypt_message(blob, rsa_n, rsa_e)
         except Exception as exc:
-            print(f"{prefix}  ✖  {fname}  —  {_err('E024', str(exc))}")
+            print(f"{pfx}  ✖  {fname}  —  {_err('E024', str(exc))}")
             mod_fail.append(fname); continue
-
         file_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             file_path.write_bytes(plaintext)
         except OSError as exc:
-            print(f"{prefix}  ✖  {fname}  —  {_err('E007', str(exc))}")
+            print(f"{pfx}  ✖  {fname}  —  {_err('E007', str(exc))}")
             mod_fail.append(fname); continue
-
         size_orig = meta.get("size", len(plaintext)) if isinstance(meta, dict) else len(plaintext)
-        print(f"{prefix}  ✔  {fname}  ({size_orig} o)")
+        print(f"{pfx}  ✔  {fname}  ({size_orig} o)")
         mod_ok += 1
         time.sleep(0.05)
 
     return mod_ok, mod_fail
 
+
 def _run_post_install_commands(current_dir: Path, commandes: list) -> tuple[int, list]:
     if not commandes:
         return 0, []
-
     total    = len(commandes)
     cmd_ok   = 0
     cmd_fail = []
-
     print(f"\n  ── Post-install : {total} commande(s) ──\n")
-
     for idx, raw_cmd in enumerate(commandes, 1):
         raw_cmd = raw_cmd.strip()
         if not raw_cmd:
             continue
         prefix = f"  [{idx:>2}/{total}]"
         print(f"{prefix}  »  {raw_cmd!r}")
-
         ok = _dispatch(current_dir, raw_cmd, prefix=prefix + "      ", from_reco=True)
         if ok:
             cmd_ok += 1
         else:
             _fail("E028", raw_cmd)
             cmd_fail.append(raw_cmd)
-
     return cmd_ok, cmd_fail
+
 
 def _cmd_install(current_dir: Path,
                  packet_path: Path | None = None,
@@ -744,11 +778,8 @@ def _cmd_install(current_dir: Path,
         for name in mod_fail: print(f"    ✖ module   {name}")
     print()
 
-    root_str = str(current_dir)
-    if root_str not in sys.path:
-        sys.path.insert(0, root_str)
-        _ok(f"Added '{root_str}' to sys.path")
-
+    _ensure_syspath(current_dir)
+    _ok(f"sys.path → '{current_dir}'")
     _animated_dots("Configuring")
     print()
 
@@ -757,18 +788,16 @@ def _cmd_install(current_dir: Path,
     except RuntimeError as exc:
         _fail("E008", str(exc)); return
 
-    db_path = current_dir / "data" / "data.hive"
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    db = FlatKV(str(db_path))
+    db_p = _db_path(current_dir)
+    db_p.parent.mkdir(parents=True, exist_ok=True)
 
-    db["version"] = "1.0"
-    if db["version"] != "1.0":
-        _fail("E009"); sys.exit(1)
+    # ── Écriture DB : context manager obligatoire → flush+close garanti ───────
+    with FlatKV(str(db_p)) as db:
+        db.set("§sys:global:version.nest",  _DB_VERSION)
+        db.set("§sys:global:codename.nest", _DB_CODENAME)
+        db.set("§sys:global:checker.nest",  _DB_CHECKER)
+    # ── DB fermée ici, toutes les données sont sur disque ─────────────────────
 
-    db.set("reco_magic",    "R_ECO3")
-    db.set("reco_version",  VERSION)
-    db.set("reco_codename", CODENAME)
-    db.set("packet_format", "rcpkg1")
     _ok("Database initialised")
 
     commandes = data.get("commandes", [])
@@ -789,71 +818,30 @@ def _cmd_install(current_dir: Path,
     _box_row(f"Modules   : {mod_ok}/{n_mods}")
     if commandes:
         _box_row(f"Commands  : {cmd_ok}/{len(commandes)}")
-    _box_row(f"DB path   : {db_path}")
+    _box_row(f"DB path   : {db_p}")
     _box_bot()
     print()
 
 
-def _cmd_run(current_dir: Path, raw_cmd: str, *, prefix: str = "") -> bool:
-    parts = raw_cmd.split(maxsplit=2)
-    if len(parts) < 2:
-        _fail("E021"); print(f"{prefix}       Usage:  run <module> [args]"); return False
-    module, run_args = parts[1], (parts[2] if len(parts) > 2 else "")
+def _cmd_reset_db(current_dir: Path) -> bool:
+    db_p = _db_path(current_dir)
+    if db_p.exists():
+        db_p.unlink()
+    db_p.parent.mkdir(parents=True, exist_ok=True)
     try:
-        apix = _load_apix(current_dir)
+        FlatKV = _load_flatKV(current_dir)
     except RuntimeError as exc:
-        _fail("E020", str(exc)); return False
-    root_str = str(current_dir)
-    if root_str not in sys.path:
-        sys.path.insert(0, root_str)
-    print(f"{prefix}  »  apix → run {module!r}" + (f"  args={run_args!r}" if run_args else ""))
-    status, result = apix.R_ECO3(f"run {module} {run_args}".strip(), print)
-    if status != 0:
-        print(f"{prefix}  ✖  {module} exited with error: {result}"); return False
-    print(f"{prefix}  ✔  {module} exited ({result})")
+        _fail("E008", str(exc)); return False
+
+    with FlatKV(str(db_p)) as db:
+        db.set("§sys:global:version.nest",  _DB_VERSION)
+        db.set("§sys:global:codename.nest", _DB_CODENAME)
+        db.set("§sys:global:checker.nest",  _DB_CHECKER)
+    # ── DB fermée ici ─────────────────────────────────────────────────────────
+
+    _ok("Hive recréé")
     return True
 
-
-def _cmd_uninstall(current_dir: Path):
-    import shutil
-    _box_top("UNINSTALL")
-    _box_row(f"Target : {current_dir}")
-    _box_bot()
-    print()
-    removed, skipped, failed = [], [], []
-    for idx, folder in enumerate(["core", "modules", "data"], 1):
-        prefix   = f"  [{idx}/3]"
-        dir_path = current_dir / folder
-        if not dir_path.exists():
-            print(f"{prefix}  ·  /{folder}  (already absent)"); skipped.append(folder); continue
-        try:
-            shutil.rmtree(dir_path)
-            print(f"{prefix}  ✔  /{folder}  removed"); removed.append(folder)
-        except OSError as exc:
-            print(f"{prefix}  ✖  /{folder}  —  {_err('E007', str(exc))}"); failed.append(folder)
-    cfg = current_dir / "R_ECO.cfg"
-    if cfg.exists():
-        try: cfg.unlink(); _ok("R_ECO.cfg removed")
-        except OSError: pass
-    print(f"\n  Removed: {len(removed)}  Skipped: {len(skipped)}  Failed: {len(failed)}\n")
-
-
-def _load_apix(current_dir: Path):
-    apix_path = current_dir / "core" / "apix.py"
-    if not apix_path.exists():
-        raise RuntimeError(_err("E020", f"'{apix_path}' not found"))
-    spec = importlib.util.spec_from_file_location("core.apix", str(apix_path))
-    if not spec or not spec.loader:
-        raise RuntimeError(_err("E020", "importlib could not build a spec"))
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["core.apix"] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception as exc:
-        raise RuntimeError(_err("E020", str(exc))) from exc
-    if not hasattr(module, "R_ECO3"):
-        raise RuntimeError(_err("E020", "'R_ECO3' missing from apix.py"))
-    return module
 
 def _dispatch(current_dir: Path, raw: str, *, prefix: str = "",
               from_reco: bool = False) -> bool:
@@ -862,18 +850,25 @@ def _dispatch(current_dir: Path, raw: str, *, prefix: str = "",
     if from_reco and verb in _RECO_FORBIDDEN:
         print(f"{prefix}  ✖  '{verb}'  —  {_err('E015', f'cannot call {verb!r} from .reco')}")
         return False
-    if verb == "set":        return _cmd_set(current_dir, raw, prefix=prefix)
-    elif verb == "get":      return _cmd_get(current_dir, raw, prefix=prefix)
-    elif verb == "del":      return _cmd_del(current_dir, raw, prefix=prefix)
-    elif verb == "list_keys":return _cmd_list_keys(current_dir, prefix=prefix)
-    elif verb == "run":      return _cmd_run(current_dir, raw, prefix=prefix)
+    if verb == "set":         return _cmd_set(current_dir, raw, prefix=prefix)
+    elif verb == "get":       return _cmd_get(current_dir, raw, prefix=prefix)
+    elif verb == "del":       return _cmd_del(current_dir, raw, prefix=prefix)
+    elif verb == "list_keys": return _cmd_list_keys(current_dir, prefix=prefix)
+    elif verb == "run":       return _cmd_run(current_dir, raw, prefix=prefix)
+    elif verb == "reset":     return _cmd_reset_db(current_dir)
     else:
         print(f"{prefix}  ✖  {_err('E014', repr(verb))}")
         print(f"{prefix}     {_HELP_RECO if from_reco else _HELP_REPL}")
         return False
 
-def R_ECO3(args, log_fn):
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  REPL principal
+# ══════════════════════════════════════════════════════════════════════════════
+
+def R_ECO3(useless):
     current_dir = Path(__file__).resolve().parent.parent
+    _ensure_syspath(current_dir)
 
     session_rsa: dict = {"n": None, "e": None, "fp": None, "source": None}
 
@@ -881,11 +876,12 @@ def R_ECO3(args, log_fn):
     if def_n is not None:
         session_rsa = {"n": def_n, "e": def_e, "fp": def_fp, "source": "DEFAULT"}
 
+    # Charger la clé RSA depuis la DB si pas de clé DEFAULT
     if session_rsa["source"] != "DEFAULT":
         try:
-            db    = _open_db(current_dir)
-            n_hex = db.get("rsa_pub_n") if db.exists("rsa_pub_n") else None
-            e_val = db.get("rsa_pub_e") if db.exists("rsa_pub_e") else None
+            with _db_ctx(current_dir) as db:
+                n_hex = db.get("rsa_pub_n") if db.exists("rsa_pub_n") else None
+                e_val = db.get("rsa_pub_e") if db.exists("rsa_pub_e") else None
             if n_hex and e_val:
                 n = int(n_hex, 16)
                 session_rsa = {"n": n, "e": int(e_val),
@@ -937,9 +933,9 @@ def R_ECO3(args, log_fn):
                     session_rsa = {"n": n, "e": e, "fp": fp, "source": "set_rsa_key"}
                     _ok(f"RSA key active  (fp: {fp})")
                     try:
-                        db = _open_db(current_dir)
-                        db.set("rsa_pub_n", hex(n))
-                        db.set("rsa_pub_e", str(e))
+                        with _db_ctx(current_dir) as db:
+                            db.set("rsa_pub_n", hex(n))
+                            db.set("rsa_pub_e", str(e))
                         _ok("Key persisted in database.")
                     except Exception:
                         _warn("DB not ready — key not persisted (lost on exit).")
@@ -954,9 +950,9 @@ def R_ECO3(args, log_fn):
                 session_rsa = {"n": n, "e": e, "fp": fp, "source": f"file:{path}"}
                 _ok(f"RSA key loaded from '{path}'  (fp: {fp})")
                 try:
-                    db = _open_db(current_dir)
-                    db.set("rsa_pub_n", hex(n))
-                    db.set("rsa_pub_e", str(e))
+                    with _db_ctx(current_dir) as db:
+                        db.set("rsa_pub_n", hex(n))
+                        db.set("rsa_pub_e", str(e))
                     _ok("Key persisted in database.")
                 except Exception:
                     _warn("DB not ready — key not persisted.")
@@ -965,7 +961,7 @@ def R_ECO3(args, log_fn):
 
         elif verb == "rsa_status":
             if session_rsa["n"] is not None:
-                _ok(f"RSA key active")
+                _ok("RSA key active")
                 print(f"     Fingerprint : {session_rsa['fp']}")
                 print(f"     Bits        : {session_rsa['n'].bit_length()}")
                 print(f"     Source      : {session_rsa['source']}")
@@ -973,7 +969,7 @@ def R_ECO3(args, log_fn):
                 _warn("No RSA key in session.")
                 print("     → use 'set_rsa_key <passphrase>' or 'load_pubkey <file>'")
                 if R_ECO_DEFAULT_PUBKEY is None:
-                    print("     → or set R_ECO_DEFAULT_PUBKEY in _start.py (run gen_default in reco_bldr)")
+                    print("     → or set R_ECO_DEFAULT_PUBKEY in _start.py")
 
         elif verb in ("quit", "exit"):
             _ok("Goodbye."); break
@@ -983,18 +979,17 @@ def R_ECO3(args, log_fn):
 
         print()
 
+
 def R_ECO3dep():
-    """Returns the minimal dependencies required for module initialization."""
-    return (("3.5.1b",), (),)
+    return {"reco": ["3.5.2b"], "module": []}
 
 def R_ECO3inf():
-    """Returns the metadata and help dictionary for RAVEN."""
     return {
-        "name": "_start",
-        "desc": "Bootstrap initialisation utility — R-ECO3 Ant",
-        "help": "System bootstrap utility. Manages the interactive REPL for installing module packets, deriving encryption keys, and initializing the internal hive database.",
-        "version_mod": "3.5.1b",
-        "L2Module": False,
-        "manual": "_start [None]"
+        "name":        "_start",
+        "desc":        "Bootstrap initialisation utility — R-ECO3 Ant",
+        "help":        "System bootstrap utility. Manages the interactive REPL for installing module packets, deriving encryption keys, and initializing the internal hive database.",
+        "version_mod": "2.1",
+        "L2Module":    False,
+        "manual":      "_start [None]",
+        "creator":     "Romaxolotl",
     }
-    
