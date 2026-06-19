@@ -5,6 +5,7 @@ Version : 1.1
 
 import math
 import re as _re
+import core
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -839,8 +840,9 @@ _CATEGORIES = [
 ]
 
 
-def R_ECO3(args: str, log_fn=print):
-    import core
+def R_ECO3(inp):
+    args = inp["args"]
+    log_fn = inp["logfn"]
     pos, _ = core.utils.parse_command(args)
 
     if pos[0] in ("help", "?", "h"):
@@ -885,12 +887,10 @@ def R_ECO3(args: str, log_fn=print):
 # ══════════════════════════════════════════════════════════════════
 
 def R_ECO3dep():
-    return (
-        ("3.5.1b",),
-        (
-            ("core.utils", ("1.1",)),
-        )
-    )
+    return {
+        "reco": ["3.5.2b"],
+        "module": []
+    }
 
 
 def R_ECO3inf():
