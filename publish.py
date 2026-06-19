@@ -61,14 +61,8 @@ def _http(method: str, path: str, token: str, payload=None) -> tuple:
 # Helpers de bas niveau
 # ─────────────────────────────────────────────
 
-def _get_db():
-    import core.trail as trail
-    import core.hive  as hive
-    return hive.HiveFS(str(trail.DB_FILE))
-
-
 def _load_token(db) -> str:
-    tok = db.get(_DB_KEY_TOKEN, as_str=True)
+    tok = db.get(_DB_KEY_TOKEN)
     return tok.strip() if tok else ""
 
 
@@ -304,18 +298,16 @@ def _cmd_status(token: str, log_fn) -> tuple:
     return 0, summary
 
 
-def _cmd_token_set(token_value: str, log_fn) -> tuple:
-    db = _get_db()
+def _cmd_token_set(token_value: str, log_fn, db) -> tuple:
     db.set(_DB_KEY_TOKEN, token_value.strip())
-    db.close()
+    
     log_fn("[publish] ✓ Token GitHub enregistré.")
     return 0, None
 
 
-def _cmd_token_show(log_fn) -> tuple:
-    db  = _get_db()
+def _cmd_token_show(log_fn, db) -> tuple:
     tok = _load_token(db)
-    db.close()
+    
 
     if not tok:
         log_fn("[publish] Aucun token enregistré.")
@@ -326,14 +318,13 @@ def _cmd_token_show(log_fn) -> tuple:
     return 0, None
 
 
-def _cmd_token_del(log_fn) -> tuple:
-    db = _get_db()
+def _cmd_token_del(log_fn, db) -> tuple:
     try:
         db.delete(_DB_KEY_TOKEN)
         log_fn("[publish] ✓ Token supprimé.")
     except Exception:
         log_fn("[publish] Aucun token à supprimer.")
-    db.close()
+    
     return 0, None
 
 
@@ -341,7 +332,7 @@ def _cmd_token_del(log_fn) -> tuple:
 # Interface R-ECO3
 # ─────────────────────────────────────────────
 
-def R_ECO3(args: str, log_fn=print) -> tuple:
+def R_ECO3(inp) -> tuple:
     """
     Point d'entrée principal du module publish.
 
@@ -357,6 +348,10 @@ def R_ECO3(args: str, log_fn=print) -> tuple:
         publish help
     """
     import core.utils as utils
+    
+    args = inp["args"]
+    log_fn = inp["logfn"]
+    db = inp["db"]
 
     positional, flags = utils.parse_command(args)
 
@@ -376,20 +371,18 @@ def R_ECO3(args: str, log_fn=print) -> tuple:
                   flags.get("message",
                   flags.get("m", "publish: mise à jour via publish.py")))
 
-        db    = _get_db()
         token = _load_token(db)
-        db.close()
+        
 
         if positional[1] == "*":
-            return _cmd_push_all(message, token, log_fn)
+            return _cmd_push_all(str(message), token, log_fn)
 
-        return _cmd_push(positional[1:], message, token, log_fn)
+        return _cmd_push(positional[1:], str(message), token, log_fn)
 
     # ── list ─────────────────────────────────
     elif cmd == "list":
-        db    = _get_db()
         token = _load_token(db)
-        db.close()
+        
         return _cmd_list(token, log_fn)
 
     # ── diff ─────────────────────────────────
@@ -397,16 +390,14 @@ def R_ECO3(args: str, log_fn=print) -> tuple:
         if len(positional) < 2:
             log_fn("[publish] Usage : publish diff <fichier>")
             return 1, "argument manquant"
-        db    = _get_db()
         token = _load_token(db)
-        db.close()
+        
         return _cmd_diff(positional[1], token, log_fn)
 
     # ── status ───────────────────────────────
     elif cmd == "status":
-        db    = _get_db()
         token = _load_token(db)
-        db.close()
+        
         return _cmd_status(token, log_fn)
 
     # ── token ────────────────────────────────
@@ -421,13 +412,13 @@ def R_ECO3(args: str, log_fn=print) -> tuple:
             if len(positional) < 3:
                 log_fn("[publish] Usage : publish token set <votre_token_github>")
                 return 1, "token manquant"
-            return _cmd_token_set(positional[2], log_fn)
+            return _cmd_token_set(positional[2], log_fn, db)
 
         elif sub == "show":
-            return _cmd_token_show(log_fn)
+            return _cmd_token_show(log_fn, db)
 
         elif sub in ("del", "delete", "rm", "remove"):
-            return _cmd_token_del(log_fn)
+            return _cmd_token_del(log_fn, db)
 
         else:
             log_fn(f"[publish] Sous-commande token inconnue : '{sub}'")
@@ -451,16 +442,11 @@ def R_ECO3(args: str, log_fn=print) -> tuple:
 # Déclarations R-ECO3
 # ─────────────────────────────────────────────
 
-def R_ECO3dep() -> tuple:
-    return (
-        ("3.5.1b",),
-        (
-            ("core.utils",  ("1.1",)),
-            ("core.hive", ("1.2",)),
-            ("core.trail",  ("1.1",)),
-        )
-    )
-    # vine et core.apix ne sont plus requis.
+def R_ECO3dep():
+    return {
+        "reco": ["3.5.2b"],
+        "module": []
+    }
 
 
 def R_ECO3inf() -> dict:
