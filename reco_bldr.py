@@ -9,6 +9,7 @@ import os
 import json
 import time
 import fnmatch
+import core
 
 
 # ─────────────────────────────────────────────
@@ -18,6 +19,11 @@ import fnmatch
 PACKET_MAGIC = "RCPKG1"
 RSA_BITS     = 4096
 
+def apix(args, logfn=None, db=None, token=None):
+    payload = {"args": args, "logfn": logfn}
+    if db    is not None: payload["db"]    = db
+    if token is not None: payload["token"] = token
+    return core.apix.R_ECO3(payload)
 
 # ═══════════════════════════════════════════════════════════════
 #  HELPERS APIX — wrappers fins autour de core.apix
@@ -25,18 +31,10 @@ RSA_BITS     = 4096
 
 def _rsa(cmd: str, log_fn=print):
     import core
-    rc, payload = core.apix.R_ECO3(f"run rsa {cmd}", log_fn)
-    if rc != 0:
+    payload = apix(f"run rsa {cmd}", log_fn)
+    if payload["status"] != 0:
         raise RuntimeError(f"[reco_bldr] apix erreur fatale : {payload}")
-    # apix retourne (0, (rc_module, (status, val)))
-    # donc payload = (rc_module, (status, val))
-    rc2, inner = payload # type: ignore
-    if rc2 != 0:
-        raise RuntimeError(f"[reco_bldr] rsa erreur : {inner}")
-    status, val = inner
-    if status != 0:
-        raise RuntimeError(f"[reco_bldr] rsa erreur : {val}")
-    return val
+    return payload["value"]
 
 
 def _fingerprint(n: int, log_fn=print) -> str:
@@ -489,8 +487,9 @@ _HELP = """\
   quit                quitte"""
 
 
-def R_ECO3(args, log_fn=print):
-    import core
+def R_ECO3(inp):
+    args = inp["args"]
+    log_fn = inp["logfn"]
 
     # ── État de la session ──────────────────────────────────────
     n         = None
@@ -501,8 +500,8 @@ def R_ECO3(args, log_fn=print):
     excludes  = []
 
     # ── Bannière ────────────────────────────────────────────────
-    core.apix.R_ECO3("run banana banner", log_fn)
-    core.apix.R_ECO3(
+    apix("run banana banner", log_fn)
+    apix(
         'run banana panel'
         ' --msg="Builder de paquets [bold cyan]RCPKG1[/bold cyan]'
         '\nRSA+AES via [dim]apix → rsa[/dim]"'
@@ -717,10 +716,13 @@ def R_ECO3(args, log_fn=print):
     return 0, (0, None)
 
 def R_ECO3dep():
-    return (("3.5.1b",), (
-        ("rsa",    ("1.0",)),
-        ("banana", ("1.1",)),
-    ),)
+    return {
+        "reco": ["3.5.2b"],
+        "module": [
+            {"rsa": ["2.1"]},
+            {"banana": ["2.1"]}
+        ]
+    }
 
 
 def R_ECO3inf():
