@@ -1,36 +1,23 @@
 """
-mycelium.py — R-ECOSYSTEM module mycelium & command dispatcher
-Version : 1.6
-Codename: Fungus
+mycelium.py — R-ECOSYSTEM module — alias/registry manager  v2.0
 
-Changes in 1.6
---------------
-- All output goes through banana (panels, ok/err, tables via Rich markup)
-- New `mycelium init` command: scans MODULES_DIR for unregistered L2 modules,
-  presents a checkbox list via banana, installs selected ones, then runs update.
-- _b() helper: loads banana once per call, falls back to log_fn transparently.
+Responsabilités :
+  - Registre des modules (core + user)
+  - Table de routage 3 couches (L1 user / L2 module / L3 default)
+  - Résolution d'alias  →  mycelium resolve <cmd>
+  - Affichage dry-run   →  mycelium rule <cmd>
+  - Gestion des règles  →  set / del / update / list / reverse
+
+N'exécute RIEN. L'exécution appartient à squid.
+db est toujours fourni par le caller (squid/raven) — mycelium ne rouvre jamais la DB.
 """
 
 import os
-import sys
-
 import core
-
-# ---------------------------------------------------------------------------
-# Bootstrap
-# ---------------------------------------------------------------------------
-try:
-    import core.trail as trail
-    import core.hive  as hive_mod
-    import core.apix  as apix
-except ImportError:
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _root = os.path.dirname(_here)
-    if _root not in sys.path:
-        sys.path.insert(0, _root)
-    import core.trail as trail
-    import core.hive  as hive_mod
-    import core.apix  as apix
+import core.trail as trail
+import core.apix  as apix
+import core.hive  as hive
+import core.utils as utils
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -45,19 +32,18 @@ _KEY_REGISTRY_CORE = "§sys:mycelium:registry:core"
 _SEP = "|||"
 
 _CORE_STEMS = frozenset({
-    "nest", "raven", "spider", "mycelium",
+    "nest", "raven", "spider", "mycelium", "squid",
     "bee", "login", "init", "moss", "banana",
-    "manual", "help", "echo", "crypto", "vine",
+    "manual", "help", "echo", "rsa", "vine",
     "prism", "reco_bldr",
 })
 
 _INTERNAL_CMDS = frozenset({
-    "list", "set", "del", "rule", "exe",
+    "list", "set", "del", "rule", "resolve",
     "help", "update", "reverse",
     "install", "uninstall", "init",
 })
 
-# Layer colours used in Rich markup
 _LAYER_COLOUR = {
     "user (L1)":    "bold magenta",
     "module (L2)":  "bold cyan",
@@ -65,92 +51,47 @@ _LAYER_COLOUR = {
 }
 
 # ---------------------------------------------------------------------------
+# apix bridge  (contrat dict v2)
+# ---------------------------------------------------------------------------
+
+def _apix(args_str: str, log_fn, db=None, token=None):
+    payload = {"args": args_str, "logfn": log_fn}
+    if db    is not None: payload["db"]    = db
+    if token is not None: payload["token"] = token
+    return apix.R_ECO3(payload)
+
+
+# ---------------------------------------------------------------------------
 # banana bridge
 # ---------------------------------------------------------------------------
 
+def _q(s: str) -> str:
+    return '"' + str(s).replace('"', '\\"') + '"'
+
+
 def _b(log_fn):
-    """
-    Return a banana-aware helper dict with keys:
-      ok(msg), err(msg), print(msg), panel(...), question(...), checkbox(...)
-    Falls back to log_fn if banana is unavailable.
-    """
-    try:
-        bn = apix.load_module("banana")
-    except Exception:
-        bn = None
+    def bn(args):
+        r = _apix(f"run banana {args}", log_fn)
+        return r.get("value") if isinstance(r, dict) else r
 
-    def _ok(msg):
-        if bn:
-            bn.R_ECO3(f"ok --msg={_q(msg)}", log_fn=log_fn)
-        else:
-            log_fn(f"  ✓ {msg}")
-
-    def _err(msg):
-        if bn:
-            bn.R_ECO3(f"err --msg={_q(msg)}", log_fn=log_fn)
-        else:
-            log_fn(f"  ✗ {msg}")
-
-    def _print(msg):
-        if bn:
-            bn.R_ECO3(f"print --msg={_q(msg)}", log_fn=log_fn)
-        else:
-            log_fn(msg)
+    def _ok(msg):    bn(f"ok --msg={_q(msg)}")
+    def _err(msg):   bn(f"err --msg={_q(msg)}")
+    def _print(msg): bn(f"print --msg={_q(msg)}")
 
     def _panel(content, title="", border="blue", subtitle="", box="ROUNDED"):
-        if bn:
-            args = f"panel --msg={_q(content)} --border={border} --box={box}"
-            if title:
-                args += f" --title={_q(title)}"
-            if subtitle:
-                args += f" --subtitle={_q(subtitle)}"
-            bn.R_ECO3(args, log_fn=log_fn)
-        else:
-            if title:
-                log_fn(f"┌─ {title} " + "─" * max(0, 50 - len(title)) + "┐")
-            for line in content.splitlines():
-                log_fn(f"  {line}")
-            if title:
-                log_fn("└" + "─" * 52 + "┘")
+        a = f"panel --msg={_q(content)} --border={border} --box={box}"
+        if title:    a += f" --title={_q(title)}"
+        if subtitle: a += f" --subtitle={_q(subtitle)}"
+        bn(a)
 
     def _question(msg, choices):
-        if bn:
-            _, ans = bn.R_ECO3(
-                f"question --msg={_q(msg)} --choices={_q(','.join(choices))}",
-                log_fn=log_fn,
-            )
-            return ans
-        # fallback: numbered list
-        log_fn(msg)
-        for i, c in enumerate(choices, 1):
-            log_fn(f"  {i}. {c}")
-        try:
-            raw = builtins_input("  Choice: ").strip()
-            idx = int(raw) - 1
-            return choices[idx] if 0 <= idx < len(choices) else None
-        except Exception:
-            return None
+        r = bn(f"question --msg={_q(msg)} --choices={_q(','.join(choices))}")
+        return r["value"] if isinstance(r, dict) else r
 
     def _checkbox(msg, choices):
-        if bn:
-            _, ans = bn.R_ECO3(
-                f"question --msg={_q(msg)} --choices={_q(','.join(choices))} --multi=true",
-                log_fn=log_fn,
-            )
-            return ans or []
-        log_fn(f"{msg}  (enter numbers separated by spaces, e.g. 1 3 5)")
-        for i, c in enumerate(choices, 1):
-            log_fn(f"  {i}. {c}")
-        try:
-            raw = builtins_input("  Selection: ").strip()
-            selected = []
-            for tok in raw.split():
-                idx = int(tok) - 1
-                if 0 <= idx < len(choices):
-                    selected.append(choices[idx])
-            return selected
-        except Exception:
-            return []
+        r = bn(f"question --msg={_q(msg)} --choices={_q(','.join(choices))} --multi=true")
+        val = r["value"] if isinstance(r, dict) else r
+        return val or []
 
     return {
         "ok":       _ok,
@@ -163,21 +104,23 @@ def _b(log_fn):
     }
 
 
-def _q(s: str) -> str:
-    """Wrap a string in double-quotes, escaping inner double-quotes."""
-    return '"' + str(s).replace('"', '\\"') + '"'
+# ---------------------------------------------------------------------------
+# DB helper — lecture simple, pas de as_str
+# ---------------------------------------------------------------------------
 
-
-import builtins as _builtins
-builtins_input = _builtins.input
-
+def _dbget(db, key: str):
+    """Lecture neutre : retourne str ou None, sans as_str."""
+    val = db.get(key)
+    if val is None:
+        return None
+    return str(val) if not isinstance(val, str) else val
 
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
 
 def _reg_read(db, key: str) -> list:
-    raw = db.get(key, as_str=True)
+    raw = _dbget(db, key)
     if not raw:
         return []
     return [s.strip() for s in raw.split(_SEP) if s.strip()]
@@ -189,11 +132,7 @@ def _reg_write(db, key: str, stems: list):
 
 def _ensure_core_registry(db):
     current = set(_reg_read(db, _KEY_REGISTRY_CORE))
-    present = set()
-    for stem in _CORE_STEMS:
-        path = trail.MODULES_DIR / f"{stem}.py"
-        if path.exists():
-            present.add(stem)
+    present = {s for s in _CORE_STEMS if (trail.MODULES_DIR / f"{s}.py").exists()}
     if present != current:
         _reg_write(db, _KEY_REGISTRY_CORE, list(present))
 
@@ -202,46 +141,38 @@ def _all_registered_stems(db) -> list:
     _ensure_core_registry(db)
     core_stems = _reg_read(db, _KEY_REGISTRY_CORE)
     user_stems = _reg_read(db, _KEY_REGISTRY)
-    seen   = set()
-    result = []
+    seen, result = set(), []
     for stem in core_stems + user_stems:
         if stem not in seen:
             seen.add(stem)
             result.append(stem)
     return result
 
+
 # ---------------------------------------------------------------------------
-# DB helpers
+# L2 module loader
 # ---------------------------------------------------------------------------
 
-def _open_db():
-    return hive_mod.HiveFS(filepath=str(trail.DB_FILE))
+def _load_l2_mods(db) -> dict:
+    """Charge tous les modules L2. db est toujours fourni."""
+    _all_registered_stems(db)   # s'assure que le registre core est à jour
 
-
-def _load_l2_modules(db=None) -> dict:
-    own_db = db is None
-    if own_db:
-        db = _open_db()
-    try:
-        stems = _all_registered_stems(db)
-    finally:
-        if own_db:
-            db.close()
+    result = _apix("listl2", lambda _: None)
+    stems  = result.get("value", []) if isinstance(result, dict) else []
 
     l2 = {}
     for stem in stems:
-        path = trail.MODULES_DIR / f"{stem}.py"
-        if not path.exists():
-            continue
         try:
-            mod = apix.load_module(stem)
-            if not hasattr(mod, "R_ECO3inf"):
-                continue
-            if mod.R_ECO3inf().get("L2Module") is True:
-                l2[stem] = mod
+            import importlib.util as _ilu
+            path = trail.MODULES_DIR / f"{stem}.py"
+            spec = _ilu.spec_from_file_location(stem, path)
+            mod  = _ilu.module_from_spec(spec) #type: ignore
+            spec.loader.exec_module(mod) #type: ignore
+            l2[stem] = mod
         except Exception:
             pass
     return l2
+
 
 # ---------------------------------------------------------------------------
 # Rule parsing
@@ -252,8 +183,7 @@ def _parse_stored_variant(keyword: str, variant_str: str):
     if "=" not in variant_str:
         return None
     marker_raw, rhs_raw = variant_str.split("=", 1)
-    marker  = marker_raw.strip()
-    rhs_raw = rhs_raw.strip()
+    marker = marker_raw.strip()
     if marker == "/*":
         no_args = True
     elif marker == "*":
@@ -261,9 +191,7 @@ def _parse_stored_variant(keyword: str, variant_str: str):
     else:
         return None
     lhs_tokens = [keyword]
-    rhs_tokens = []
-    for tok in rhs_raw.split():
-        rhs_tokens.append(None if tok == "*" else tok)
+    rhs_tokens = [None if tok == "*" else tok for tok in rhs_raw.strip().split()]
     return (lhs_tokens, no_args, rhs_tokens)
 
 
@@ -293,25 +221,19 @@ def _parse_legacy_rule(rule_str: str):
     if "=" not in rule_str:
         return None
     lhs_raw, rhs_raw = rule_str.split("=", 1)
-    lhs_raw  = lhs_raw.strip()
-    rhs_raw  = rhs_raw.strip()
-    lhs_parts = lhs_raw.split()
+    lhs_parts = lhs_raw.strip().split()
     if not lhs_parts:
         return None
     marker = lhs_parts[-1]
     if marker == "/*":
-        no_args    = True
-        lhs_tokens = lhs_parts[:-1]
+        no_args, lhs_tokens = True,  lhs_parts[:-1]
     elif marker == "*":
-        no_args    = False
-        lhs_tokens = lhs_parts[:-1]
+        no_args, lhs_tokens = False, lhs_parts[:-1]
     else:
         return None
     if not lhs_tokens:
         lhs_tokens = ["*"]
-    rhs_tokens = []
-    for tok in rhs_raw.split():
-        rhs_tokens.append(None if tok in ("*", "/*") else tok)
+    rhs_tokens = [None if tok in ("*", "/*") else tok for tok in rhs_raw.strip().split()]
     return (lhs_tokens, no_args, rhs_tokens)
 
 
@@ -326,12 +248,13 @@ def _group_legacy_rules_by_keyword(raw: str) -> dict:
         groups.setdefault(keyword, []).append(parsed)
     return groups
 
+
 # ---------------------------------------------------------------------------
 # Layer helpers
 # ---------------------------------------------------------------------------
 
 def _layer_get(db, prefix: str, keyword: str):
-    raw = db.get(f"{prefix}{keyword}", as_str=True)
+    raw = _dbget(db, f"{prefix}{keyword}")
     if not raw:
         return []
     return _parse_stored_value(keyword, raw)
@@ -343,14 +266,13 @@ def _layer_keywords(db, prefix: str) -> list:
         return [k[len(prefix):] for k in keys]
     except AttributeError:
         pass
-    l2       = _load_l2_modules(db)
-    keywords = list(l2.keys()) + ["*"]
+    l2 = _load_l2_mods(db)
     existing = []
-    for kw in keywords:
-        raw = db.get(f"{prefix}{kw}", as_str=True)
-        if raw:
+    for kw in list(l2) + ["*"]:
+        if _dbget(db, f"{prefix}{kw}"):
             existing.append(kw)
     return existing
+
 
 # ---------------------------------------------------------------------------
 # Default rules / inf reader
@@ -372,12 +294,13 @@ def _rules_from_inf(stem: str, mod) -> dict:
         pass
     return {}
 
+
 # ---------------------------------------------------------------------------
 # Build routing table
 # ---------------------------------------------------------------------------
 
 def _build_mycelium(db):
-    l2 = _load_l2_modules(db)
+    l2 = _load_l2_mods(db)
     routing_table     = []
     all_keywords_seen = set()
 
@@ -393,20 +316,14 @@ def _build_mycelium(db):
         rules = _layer_get(db, _PREFIX_MODULE, kw)
         if not rules:
             continue
-        default_rules = _default_rules_for_stem(kw)
-        l2_v, l3_v = [], []
-        for rule in rules:
-            if any(_build_stored_value([rule]) == _build_stored_value([d]) for d in default_rules):
-                l3_v.append(rule)
-            else:
-                l2_v.append(rule)
-        if l2_v:
-            routing_table.append((kw, "module (L2)", l2_v))
-        if l3_v:
-            routing_table.append((kw, "default (L3)", l3_v))
+        default_vals = {_build_stored_value([d]) for d in _default_rules_for_stem(kw)}
+        l2_v = [r for r in rules if _build_stored_value([r]) not in default_vals]
+        l3_v = [r for r in rules if _build_stored_value([r]) in default_vals]
+        if l2_v: routing_table.append((kw, "module (L2)", l2_v))
+        if l3_v: routing_table.append((kw, "default (L3)", l3_v))
         all_keywords_seen.add(kw)
 
-    for stem in sorted(l2.keys()):
+    for stem in sorted(l2):
         if stem not in all_keywords_seen:
             routing_table.append((stem, "default (L3)", _default_rules_for_stem(stem)))
             all_keywords_seen.add(stem)
@@ -426,44 +343,43 @@ def _build_mycelium(db):
             default_vals = {_build_stored_value([r]) for r in _default_rules_for_stem(kw)}
             l2_only = [r for r in rules if _build_stored_value([r]) not in default_vals]
             l3_only = [r for r in rules if _build_stored_value([r]) in default_vals]
-            if l2_only:
-                normalized.append((kw, "module (L2)", l2_only))
-            if l3_only:
-                normalized.append((kw, "default (L3)", l3_only))
+            if l2_only: normalized.append((kw, "module (L2)", l2_only))
+            if l3_only: normalized.append((kw, "default (L3)", l3_only))
         else:
             normalized.append((kw, src, rules))
     return normalized
 
+
 # ---------------------------------------------------------------------------
-# Resolver
+# Resolver (pur, sans effet de bord)
 # ---------------------------------------------------------------------------
 
 def _resolve(command_line: str, routing_table: list):
     if not command_line.strip():
         return None, "empty command"
+
     input_tokens = command_line.split()
     candidates   = []
+
     for (_kw, _src, rules) in routing_table:
         for (lhs_tokens, no_args, rhs_tokens) in rules:
             if lhs_tokens == ["*"]:
                 extra = input_tokens
-                if no_args and extra:
-                    continue
-                if not no_args and not extra:
-                    continue
+                if no_args and extra:         continue
+                if not no_args and not extra: continue
                 candidates.append((0, int(no_args), rhs_tokens, extra))
                 continue
             n = len(lhs_tokens)
             if input_tokens[:n] != lhs_tokens:
                 continue
             extra = input_tokens[n:]
-            if no_args and extra:
-                continue
-            if not no_args and not extra:
-                continue
+            if no_args and extra:         continue
+            if not no_args and not extra: continue
             candidates.append((n, int(no_args), rhs_tokens, extra))
+
     if not candidates:
-        return None, f"unknown command: '{input_tokens[0]}'"
+        return None, None
+
     best = max(candidates, key=lambda c: (c[0], c[1]))
     _, _, rhs_tokens, extra = best
     final_tokens = []
@@ -474,17 +390,6 @@ def _resolve(command_line: str, routing_table: list):
             final_tokens.append(tok)
     return " ".join(final_tokens), None
 
-# ---------------------------------------------------------------------------
-# Public Python API
-# ---------------------------------------------------------------------------
-
-def resolve_command(command_line: str, log_fn=print):
-    db = _open_db()
-    try:
-        table = _build_mycelium(db)
-        return _resolve(command_line, table)
-    finally:
-        db.close()
 
 # ---------------------------------------------------------------------------
 # Rule display helper
@@ -496,93 +401,55 @@ def _rule_to_str(lhs_tokens, no_args, rhs_tokens) -> str:
     rhs_str = " ".join("*" if t is None else t for t in rhs_tokens)
     return f"{lhs_str}{marker} = {rhs_str}"
 
+
 # ---------------------------------------------------------------------------
-# Sub-command: init  (NEW in v1.6)
+# Sub-command: init
 # ---------------------------------------------------------------------------
 
 def _cmd_init(db, log_fn):
-    """
-    mycelium init
-
-    Scans MODULES_DIR for .py files that:
-      - Are not already registered (neither core nor user)
-      - Implement R_ECO3 / R_ECO3dep / R_ECO3inf with L2Module=True
-
-    Presents a checkbox list via banana so the user can choose which ones to
-    install.  Selected modules are added to the user registry, then
-    `mycelium update` is run to sync their alias rules into L2.
-    """
     b = _b(log_fn)
+    b["panel"]("Scanning [bold]modules/[/] for unregistered L2 modules…",
+               title=" mycelium init ", border="cyan")
 
-    b["panel"](
-        "Scanning [bold]modules/[/] for unregistered L2 modules…",
-        title=" mycelium init ",
-        border="cyan",
-    )
+    registered  = set(_all_registered_stems(db))
+    list_result = _apix("list", lambda _: None)
+    all_stems   = list_result.get("value", []) if isinstance(list_result, dict) else []
 
-    registered = set(_all_registered_stems(db))
-
-    # Scan filesystem for candidates
-    candidates = []   # list of (stem, name, version, desc)
-    for fname in sorted(os.listdir(str(trail.MODULES_DIR))):
-        if not fname.endswith(".py") or fname.startswith("_"):
-            continue
-        stem = fname[:-3]
+    candidates = []
+    for stem in all_stems:
         if stem in registered:
             continue
-        path = trail.MODULES_DIR / fname
-        if not path.exists():
+        inf_result = _apix(f"inf {stem}", lambda _: None)
+        inf        = inf_result.get("value", {}) if isinstance(inf_result, dict) else {}
+        if inf.get("L2Module") is not True:
             continue
-        try:
-            mod = apix.load_module(stem)
-            if not (hasattr(mod, "R_ECO3") and hasattr(mod, "R_ECO3dep") and hasattr(mod, "R_ECO3inf")):
-                continue
-            inf = mod.R_ECO3inf()
-            if inf.get("L2Module") is not True:
-                continue
-            candidates.append((
-                stem,
-                inf.get("name",        stem),
-                inf.get("version_mod", "?"),
-                inf.get("desc",        ""),
-            ))
-        except Exception:
-            continue
+        candidates.append((stem, inf.get("name", stem),
+                            inf.get("version_mod", "?"), inf.get("desc", "")))
 
     if not candidates:
         b["ok"]("No new modules found — registry is already up to date.")
         return 0
 
-    # Build checkbox choices: "stem — desc (vX.Y)"
     choices = [
         f"{stem}  —  {desc}  [v{ver}]" if desc else f"{stem}  [v{ver}]"
         for stem, _, ver, desc in candidates
     ]
-
     b["print"](f"[dim]Found [bold]{len(candidates)}[/] unregistered module(s).[/]")
 
     selected_labels = b["checkbox"](
-        "Select modules to install  (space = toggle, enter = confirm)",
-        choices,
-    )
+        "Select modules to install  (space = toggle, enter = confirm)", choices)
 
     if not selected_labels:
         b["print"]("[dim]Nothing selected — no changes made.[/]")
         return 0
 
-    # Map label back to stem
     label_to_stem = {label: stem for (stem, _, ver, desc), label in zip(candidates, choices)}
-
-    installed = []
-    failed    = []
-    user_stems = _reg_read(db, _KEY_REGISTRY)
+    user_stems    = _reg_read(db, _KEY_REGISTRY)
+    installed     = []
 
     for label in selected_labels:
         stem = label_to_stem.get(label)
-        if not stem:
-            continue
-        if stem in user_stems:
-            b["print"](f"[dim]  · {stem} already registered, skipping.[/]")
+        if not stem or stem in user_stems:
             continue
         user_stems.append(stem)
         installed.append(stem)
@@ -591,8 +458,6 @@ def _cmd_init(db, log_fn):
         _reg_write(db, _KEY_REGISTRY, user_stems)
         for stem in installed:
             b["ok"](f"Installed: [bold]{stem}[/]")
-
-        # Run update to sync L2 alias rules for newly installed modules
         b["print"]("\n[dim]Running [bold]mycelium update[/] to sync alias rules…[/]")
         _cmd_update(db, log_fn)
     else:
@@ -600,19 +465,18 @@ def _cmd_init(db, log_fn):
 
     return 0
 
+
 # ---------------------------------------------------------------------------
 # Sub-command: install
 # ---------------------------------------------------------------------------
 
 def _cmd_install(tokens, db, log_fn):
     b = _b(log_fn)
-
     if len(tokens) < 2:
         b["err"]("usage: mycelium install <stem>")
         return 1
 
     stem = tokens[1]
-
     if stem in _CORE_STEMS:
         b["print"](f"[dim]'{stem}' is a core module — registered automatically.[/]")
         return 0
@@ -623,11 +487,8 @@ def _cmd_install(tokens, db, log_fn):
         return 1
 
     try:
-        mod = apix.load_module(stem)
-        if not (hasattr(mod, "R_ECO3inf") and hasattr(mod, "R_ECO3") and hasattr(mod, "R_ECO3dep")):
-            b["err"](f"'{stem}' does not implement the R-ECO3 convention (R_ECO3 / R_ECO3dep / R_ECO3inf required)")
-            return 1
-        inf = mod.R_ECO3inf()
+        inf_result = _apix(f"inf {stem}", lambda _: None)
+        inf        = inf_result.get("value", {}) if isinstance(inf_result, dict) else {}
         if inf.get("L2Module") is not True:
             b["err"](f"'{stem}' declares L2Module=False — only L2 modules can be registered")
             return 1
@@ -645,14 +506,12 @@ def _cmd_install(tokens, db, log_fn):
 
     user_stems.append(stem)
     _reg_write(db, _KEY_REGISTRY, user_stems)
-
     b["panel"](
         f"[bold]{mod_name}[/]  v{mod_version}\n{mod_desc}\n\n"
         f"[dim]Run [bold cyan]mycelium update[/] to load alias rules into L2.[/]",
-        title=" Module installed ",
-        border="green",
-    )
+        title=" Module installed ", border="green")
     return 0
+
 
 # ---------------------------------------------------------------------------
 # Sub-command: uninstall
@@ -660,13 +519,11 @@ def _cmd_install(tokens, db, log_fn):
 
 def _cmd_uninstall(tokens, db, log_fn):
     b = _b(log_fn)
-
     if len(tokens) < 2:
         b["err"]("usage: mycelium uninstall <stem>")
         return 1
 
     stem = tokens[1]
-
     if stem in _CORE_STEMS:
         b["err"](f"'{stem}' is a core module and cannot be uninstalled.")
         return 1
@@ -676,14 +533,13 @@ def _cmd_uninstall(tokens, db, log_fn):
         b["err"](f"'{stem}' is not in the user registry.")
         return 1
 
-    path = trail.MODULES_DIR / f"{stem}.py"
+    path        = trail.MODULES_DIR / f"{stem}.py"
     delete_file = False
 
     if path.exists():
         choice = b["question"](
             f"Uninstall '{stem}' — also delete {stem}.py?",
-            ["Remove from registry only", "Delete file too", "Cancel"],
-        )
+            ["Remove from registry only", "Delete file too", "Cancel"])
         if choice is None or "cancel" in str(choice).lower():
             b["print"]("[dim]Uninstall cancelled.[/]")
             return 0
@@ -691,20 +547,17 @@ def _cmd_uninstall(tokens, db, log_fn):
     else:
         choice = b["question"](
             f"'{stem}.py' not found on disk. Remove '{stem}' from registry?",
-            ["Yes", "Cancel"],
-        )
+            ["Yes", "Cancel"])
         if choice is None or "cancel" in str(choice).lower():
             b["print"]("[dim]Uninstall cancelled.[/]")
             return 0
 
-    # Remove from registry
     user_stems = [s for s in user_stems if s != stem]
     _reg_write(db, _KEY_REGISTRY, user_stems)
 
-    # Clean rules
     for prefix in (_PREFIX_USER, _PREFIX_MODULE):
         key = f"{prefix}{stem}"
-        if db.get(key, as_str=True):
+        if _dbget(db, key):
             db.delete(key)
 
     if delete_file and path.exists():
@@ -716,13 +569,14 @@ def _cmd_uninstall(tokens, db, log_fn):
     b["ok"](f"'{stem}' uninstalled successfully.")
     return 0
 
+
 # ---------------------------------------------------------------------------
 # Sub-command: list
 # ---------------------------------------------------------------------------
 
 def _cmd_list(tokens, db, log_fn):
     b  = _b(log_fn)
-    l2 = _load_l2_modules(db)
+    l2 = _load_l2_mods(db)
 
     # ── Detail view for one keyword ───────────────────────────────────────
     if len(tokens) > 1:
@@ -734,7 +588,7 @@ def _cmd_list(tokens, db, log_fn):
             (_PREFIX_USER,   "user (L1)",   "magenta"),
             (_PREFIX_MODULE, "module (L2)", "cyan"),
         ):
-            raw = db.get(f"{prefix}{target}", as_str=True)
+            raw = _dbget(db, f"{prefix}{target}")
             if not raw:
                 continue
             found = True
@@ -764,7 +618,6 @@ def _cmd_list(tokens, db, log_fn):
                         lines.append(f"  [dim]rule   :[/] [bold]{_rule_to_str(*rule)}[/]")
                 b["panel"]("\n".join(lines), title=f" {target} ", border="blue")
                 return 0
-
             b["err"](f"'{target}': not found in any layer and not a known L2 stem")
             return 1
 
@@ -775,39 +628,36 @@ def _cmd_list(tokens, db, log_fn):
     core_reg = _reg_read(db, _KEY_REGISTRY_CORE)
     user_reg = _reg_read(db, _KEY_REGISTRY)
 
-    # ── Registry panel ────────────────────────────────────────────────────
     reg_lines = []
-
     reg_lines.append(f"[bold]Core modules[/]  [dim]({len(core_reg)} auto-registered)[/]")
     for stem in sorted(core_reg):
-        path   = trail.MODULES_DIR / f"{stem}.py"
-        status = "[green]✓[/]" if path.exists() else "[red]✗ MISSING[/]"
-        # grab desc if loaded
-        mod  = l2.get(stem)
-        desc = mod.R_ECO3inf().get("desc", "") if mod else ""
-        ver  = mod.R_ECO3inf().get("version_mod", "") if mod else ""
-        ver_str  = f" [dim]v{ver}[/]" if ver else ""
-        desc_str = f"  [dim]{desc}[/]"  if desc else ""
+        path     = trail.MODULES_DIR / f"{stem}.py"
+        status   = "[green]✓[/]" if path.exists() else "[red]✗ MISSING[/]"
+        mod      = l2.get(stem)
+        desc     = mod.R_ECO3inf().get("desc", "")        if mod else ""
+        ver      = mod.R_ECO3inf().get("version_mod", "") if mod else ""
+        ver_str  = f" [dim]v{ver}[/]"  if ver  else ""
+        desc_str = f"  [dim]{desc}[/]" if desc else ""
         reg_lines.append(f"  {status} [cyan]{stem:<18}[/]{ver_str}{desc_str}")
 
     reg_lines.append("")
     reg_lines.append(f"[bold]User modules[/]  [dim]({len(user_reg)} installed)[/]")
     if user_reg:
         for stem in sorted(user_reg):
-            path   = trail.MODULES_DIR / f"{stem}.py"
-            status = "[green]✓[/]" if path.exists() else "[red]✗ MISSING[/]"
-            mod    = l2.get(stem)
-            desc   = mod.R_ECO3inf().get("desc", "") if mod else ""
-            ver    = mod.R_ECO3inf().get("version_mod", "") if mod else ""
-            ver_str  = f" [dim]v{ver}[/]" if ver else ""
+            path     = trail.MODULES_DIR / f"{stem}.py"
+            status   = "[green]✓[/]" if path.exists() else "[red]✗ MISSING[/]"
+            mod      = l2.get(stem)
+            desc     = mod.R_ECO3inf().get("desc", "")        if mod else ""
+            ver      = mod.R_ECO3inf().get("version_mod", "") if mod else ""
+            ver_str  = f" [dim]v{ver}[/]"  if ver  else ""
             desc_str = f"  [dim]{desc}[/]" if desc else ""
             reg_lines.append(f"  {status} [magenta]{stem:<18}[/]{ver_str}{desc_str}")
     else:
-        reg_lines.append("  [dim](none — use [bold]mycelium install <stem>[/] or [bold]mycelium init[/])[/]")
+        reg_lines.append(
+            "  [dim](none — use [bold]mycelium install <stem>[/] or [bold]mycelium init[/])[/]")
 
     b["panel"]("\n".join(reg_lines), title=" Registry ", border="cyan", box="ROUNDED")
 
-    # ── Routing table panel ───────────────────────────────────────────────
     table    = _build_mycelium(db)
     by_layer = {}
     for kw, src, rules in table:
@@ -815,26 +665,23 @@ def _cmd_list(tokens, db, log_fn):
 
     layer_order = ["user (L1)", "module (L2)", "default (L3)"]
     route_lines = []
-
     for layer in layer_order:
         entries = by_layer.get(layer, [])
         if not entries:
             continue
         colour = _LAYER_COLOUR.get(layer, "white")
         route_lines.append(f"[{colour}]{layer}[/]")
-
         from collections import defaultdict as _dd
         merged = _dd(list)
         for kw, rules in entries:
             merged[kw].extend(rules)
-
         for kw, rules in sorted(merged.items()):
-            val = _build_stored_value(rules)
-            route_lines.append(f"  [bold]{kw:<20}[/] [dim]{val}[/]")
+            route_lines.append(f"  [bold]{kw:<20}[/] [dim]{_build_stored_value(rules)}[/]")
         route_lines.append("")
 
     b["panel"]("\n".join(route_lines).rstrip(), title=" Routing table ", border="blue", box="ROUNDED")
     return 0
+
 
 # ---------------------------------------------------------------------------
 # Sub-command: set
@@ -845,7 +692,6 @@ def _cmd_set(tokens, args_raw, db, log_fn):
     if len(tokens) < 3:
         b["err"]("usage: mycelium set <keyword> <variants>")
         b["print"]("  variants: [dim]'/* = module args ||| * = module args *'[/]")
-        b["print"]("  (always stored in Layer 1 — user override)")
         return 1
 
     keyword = tokens[1]
@@ -867,6 +713,7 @@ def _cmd_set(tokens, args_raw, db, log_fn):
     b["ok"](f"[magenta]user (L1)[/]  {keyword} = {raw_val}")
     return 0
 
+
 # ---------------------------------------------------------------------------
 # Sub-command: del
 # ---------------------------------------------------------------------------
@@ -880,11 +727,11 @@ def _cmd_del(tokens, db, log_fn):
     keyword = tokens[1]
     l1_key  = f"{_PREFIX_USER}{keyword}"
     l2_key  = f"{_PREFIX_MODULE}{keyword}"
-    l2      = _load_l2_modules(db)
+    l2      = _load_l2_mods(db)
 
     if db.delete(l1_key):
         b["ok"](f"user (L1) override for [bold]{keyword}[/] removed")
-        raw_l2 = db.get(l2_key, as_str=True)
+        raw_l2 = _dbget(db, l2_key)
         if raw_l2:
             b["print"](f"  [dim]→ now resolved via module (L2): {raw_l2}[/]")
         elif keyword in l2:
@@ -893,7 +740,7 @@ def _cmd_del(tokens, db, log_fn):
             b["print"]("  [yellow]→ no L2/L3 fallback — keyword will be unknown[/]")
         return 0
 
-    raw_l2 = db.get(l2_key, as_str=True)
+    raw_l2 = _dbget(db, l2_key)
     if raw_l2:
         b["print"](f"[dim]'{keyword}' has no user (L1) override to delete.[/]")
         b["print"](f"[dim]Current module (L2): {raw_l2}[/]")
@@ -901,69 +748,53 @@ def _cmd_del(tokens, db, log_fn):
         return 0
 
     for stem, mod in l2.items():
-        inf_groups = _rules_from_inf(stem, mod)
-        if keyword in inf_groups:
-            raw_inf = _build_stored_value(inf_groups[keyword])
-            b["print"](f"[dim]'{keyword}' only in inf of '{stem}': {raw_inf}[/]")
-            b["print"](f"[dim]Run [bold]mycelium update[/] first, then del.[/]")
+        if keyword in _rules_from_inf(stem, mod):
+            b["print"](f"[dim]'{keyword}' only in inf of '{stem}' — run update first[/]")
             return 0
 
     b["err"](f"'{keyword}': not found in any layer")
     return 1
 
+
 # ---------------------------------------------------------------------------
-# Sub-command: rule
+# Sub-command: rule  (dry-run human — db fourni par _with_db)
 # ---------------------------------------------------------------------------
 
-def _cmd_rule(args_raw, log_fn):
-    b     = _b(log_fn)
-    parts = args_raw.strip().split(None, 1)
+def _cmd_rule(args_raw, db, log_fn):
+    b        = _b(log_fn)
+    parts    = args_raw.strip().split(None, 1)
     rule_cmd = parts[1] if len(parts) > 1 else ""
     if not rule_cmd:
         b["err"]("usage: mycelium rule <command> [args...]")
         return 1
 
-    db = _open_db()
-    try:
-        table = _build_mycelium(db)
-    finally:
-        db.close()
-
+    table = _build_mycelium(db)
     dispatch, err_msg = _resolve(rule_cmd, table)
     if dispatch is None:
-        b["err"](err_msg)
+        if err_msg is not None:
+            b["err"](err_msg)
         return 1
 
     d_parts  = dispatch.split()
     mod_name = d_parts[0]
     mod_args = " ".join(d_parts[1:]) if len(d_parts) > 1 else ""
 
-    db2 = _open_db()
-    try:
-        input_kw = rule_cmd.split()[0]
-        raw_l1   = db2.get(f"{_PREFIX_USER}{input_kw}",   as_str=True)
-        raw_l2   = db2.get(f"{_PREFIX_MODULE}{input_kw}", as_str=True)
-        if raw_l1:
-            source_label = "user (L1)"
-            source_col   = "magenta"
-        elif raw_l2:
-            source_label = "module (L2)"
-            source_col   = "cyan"
+    input_kw = rule_cmd.split()[0]
+    raw_l1   = _dbget(db, f"{_PREFIX_USER}{input_kw}")
+    raw_l2   = _dbget(db, f"{_PREFIX_MODULE}{input_kw}")
+
+    if raw_l1:
+        source_label, source_col = "user (L1)",   "magenta"
+    elif raw_l2:
+        source_label, source_col = "module (L2)", "cyan"
+    else:
+        l2  = _load_l2_mods(db)
+        mod = l2.get(mod_name)
+        inf_grp = _rules_from_inf(mod_name, mod) if mod else {}
+        if input_kw in inf_grp:
+            source_label, source_col = "inf (run update)", "yellow"
         else:
-            l2  = _load_l2_modules(db2)
-            mod = l2.get(mod_name)
-            inf_grp = _rules_from_inf(mod_name, mod) if mod else {}
-            if input_kw in inf_grp:
-                source_label = "inf (run update)"
-                source_col   = "yellow"
-            else:
-                source_label = "default (L3)"
-                source_col   = "dim"
-    except Exception:
-        source_label = "?"
-        source_col   = "dim"
-    finally:
-        db2.close()
+            source_label, source_col = "default (L3)", "dim"
 
     arrow = f"[bold]{rule_cmd}[/]  →  [bold green]{mod_name}[/]"
     if mod_args:
@@ -971,6 +802,34 @@ def _cmd_rule(args_raw, log_fn):
     arrow += f"  [[{source_col}]{source_label}[/]]"
     b["panel"](arrow, title=" rule resolution ", border="blue", box="SIMPLE")
     return 0
+
+
+# ---------------------------------------------------------------------------
+# Sub-command: resolve  (machine-facing, appelé par squid)
+# ---------------------------------------------------------------------------
+
+def _cmd_resolve(tokens, args_raw, db, log_fn):
+    """
+    Résolution pure. Retourne la dispatch string ou 1.
+    apix._wrap() encapsule en {"status":0, "value":dispatch}.
+    """
+    b     = _b(log_fn)
+    parts = args_raw.strip().split(None, 1)
+    cmd_line = parts[1] if len(parts) > 1 else ""
+
+    if not cmd_line:
+        b["err"]("usage: mycelium resolve <command> [args...]")
+        return 1
+
+    table = _build_mycelium(db)
+    dispatch, err_msg = _resolve(cmd_line, table)
+    if dispatch is None:
+        if err_msg is not None:
+            b["err"](err_msg)
+        return 1
+
+    return dispatch
+
 
 # ---------------------------------------------------------------------------
 # Sub-command: reverse
@@ -981,6 +840,7 @@ def _cmd_reverse(tokens, db, log_fn):
     if len(tokens) < 2:
         b["err"]("usage: mycelium reverse <target_module>")
         return 1
+
     target = tokens[1]
     table  = _build_mycelium(db)
     found  = []
@@ -1004,6 +864,7 @@ def _cmd_reverse(tokens, db, log_fn):
     b["panel"]("\n".join(lines), title=f" → {target} ", border="magenta")
     return 0
 
+
 # ---------------------------------------------------------------------------
 # Sub-command: update
 # ---------------------------------------------------------------------------
@@ -1011,7 +872,7 @@ def _cmd_reverse(tokens, db, log_fn):
 def _cmd_update(db, log_fn):
     b = _b(log_fn)
 
-    # ── A) Registry integrity ─────────────────────────────────────────────
+    # A) Intégrité du registre
     removed_total = 0
     for reg_key, label in ((_KEY_REGISTRY_CORE, "core"), (_KEY_REGISTRY, "user")):
         stems = _reg_read(db, reg_key)
@@ -1020,7 +881,7 @@ def _cmd_update(db, log_fn):
             if (trail.MODULES_DIR / f"{stem}.py").exists():
                 kept.append(stem)
             else:
-                b["print"](f"[yellow]  ✗ '{stem}' missing on disk — removed from {label} registry[/]")
+                b["print"](f"[yellow]  ✗ '{stem}' missing — removed from {label} registry[/]")
                 removed_total += 1
         if len(kept) != len(stems):
             _reg_write(db, reg_key, kept)
@@ -1028,18 +889,14 @@ def _cmd_update(db, log_fn):
     if removed_total == 0:
         b["ok"]("Registry integrity OK — all modules present on disk.")
     else:
-        b["print"](f"[yellow]  {removed_total} missing module(s) purged from registry.[/]")
+        b["print"](f"[yellow]  {removed_total} missing module(s) purged.[/]")
 
-    # ── B) L2 alias sync ─────────────────────────────────────────────────
-    l2        = _load_l2_modules(db)
-    written   = 0
-    skipped   = 0
-    updated   = 0
-    conflicts = 0
-    deleted   = 0
+    # B) Sync L2 alias
+    l2                          = _load_l2_mods(db)
+    written = skipped = updated = conflicts = deleted = 0
 
     inf_index = {}
-    for stem in sorted(l2.keys()):
+    for stem in sorted(l2):
         for keyword, inf_rules in _rules_from_inf(stem, l2[stem]).items():
             inf_index[keyword] = _build_stored_value(inf_rules)
 
@@ -1047,8 +904,7 @@ def _cmd_update(db, log_fn):
 
     for keyword, new_val in inf_index.items():
         l2_key  = f"{_PREFIX_MODULE}{keyword}"
-        cur_val = db.get(l2_key, as_str=True)
-
+        cur_val = _dbget(db, l2_key)
         if cur_val is None:
             db.set(l2_key, new_val)
             b["print"](f"  [cyan]+[/] {keyword} = [dim]{new_val}[/]")
@@ -1059,11 +915,10 @@ def _cmd_update(db, log_fn):
             conflicts += 1
             choice = b["question"](
                 f"Conflict for '{keyword}' — keep which?\n"
-                f"  current L2: {cur_val}\n"
+                f"  current L2 : {cur_val}\n"
                 f"  new   (inf): {new_val}",
-                ["Keep current (L2)", "Use new (inf)", "Skip"],
-            )
-            if choice and "new" in str(choice).lower():
+                ["Keep current (L2)", "Use new (inf)", "Skip"])
+            if choice and "new"  in str(choice).lower():
                 db.set(l2_key, new_val)
                 b["print"](f"  [cyan]~[/] {keyword} updated")
                 updated += 1
@@ -1078,60 +933,31 @@ def _cmd_update(db, log_fn):
         deleted += 1
 
     summary = (
-        f"[green]wrote {written}[/]  "
-        f"[dim]skipped {skipped}[/]  "
-        f"[cyan]updated {updated}[/]  "
-        f"[yellow]conflicts {conflicts}[/]  "
-        f"[red]deleted {deleted}[/]  "
-        f"[yellow]registry_removed {removed_total}[/]"
+        f"[green]wrote {written}[/]  [dim]skipped {skipped}[/]  "
+        f"[cyan]updated {updated}[/]  [yellow]conflicts {conflicts}[/]  "
+        f"[red]deleted {deleted}[/]  [yellow]registry_removed {removed_total}[/]"
     )
-    b["panel"](
-        summary + "\n\n[dim]User (L1) overrides are never modified by update.[/]",
-        title=" update complete ",
-        border="green",
-        box="ROUNDED",
-    )
+    b["panel"](summary + "\n\n[dim]User (L1) overrides are never modified by update.[/]",
+               title=" update complete ", border="green", box="ROUNDED")
     return 0
 
+
 # ---------------------------------------------------------------------------
-# Execute helper
+# R_ECO3 — point d'entrée  (contrat dict apix v2)
 # ---------------------------------------------------------------------------
 
-def _exe(command_line: str, log_fn=print):
-    b = _b(log_fn)
-    if not command_line.strip():
-        b["err"]("usage: mycelium exe <command> [args...]")
-        return 1
+def R_ECO3(inp):
+    """
+    inp = {args, logfn, db?, token?}
+    db est réutilisé s'il est fourni — mycelium n'ouvre jamais la DB
+    sauf en dernier recours (appels directs sans caller, ex. tests).
+    """
+    args   = inp.get("args",  "")    if isinstance(inp, dict) else str(inp)
+    log_fn = inp.get("logfn", print) if isinstance(inp, dict) else print
+    ext_db = inp.get("db")           if isinstance(inp, dict) else None
 
-    db = _open_db()
     try:
-        table = _build_mycelium(db)
-    finally:
-        db.close()
-
-    dispatch, err_msg = _resolve(command_line, table)
-    if dispatch is None:
-        b["err"](err_msg)
-        return 1
-
-    d_parts     = dispatch.split()
-    mod_name    = d_parts[0]
-    mod_args    = " ".join(d_parts[1:]) if len(d_parts) > 1 else ""
-    spider_args = f"{mod_name} -vr"
-    if mod_args:
-        spider_args += f" --args=\"{mod_args}\""
-
-    code, result = apix.run_module_cmd("spider", "run", spider_args, log_fn=log_fn)
-    return code if isinstance(code, int) else 0
-
-# ---------------------------------------------------------------------------
-# R_ECO3 — main entry point
-# ---------------------------------------------------------------------------
-
-def R_ECO3(args: str, log_fn=print):
-    try:
-        import core.utils as _utils
-        tokens = _utils.tokenize(args.strip()) if args.strip() else []
+        tokens = utils.tokenize(args.strip()) if args.strip() else []
     except Exception:
         tokens = args.strip().split() if args.strip() else []
 
@@ -1141,73 +967,20 @@ def R_ECO3(args: str, log_fn=print):
 
     sub = tokens[0]
 
-    if sub == "init":
-        db = _open_db()
-        try:
-            return _cmd_init(db, log_fn)
-        finally:
-            db.close()
+    def _with_db(fn):
+        if ext_db is not None:
+            return fn(ext_db)
 
-    if sub == "install":
-        db = _open_db()
-        try:
-            return _cmd_install(tokens, db, log_fn)
-        finally:
-            db.close()
-
-    if sub == "uninstall":
-        db = _open_db()
-        try:
-            return _cmd_uninstall(tokens, db, log_fn)
-        finally:
-            db.close()
-
-    if sub == "list":
-        db = _open_db()
-        try:
-            return _cmd_list(tokens, db, log_fn)
-        finally:
-            db.close()
-
-    if sub == "set":
-        db = _open_db()
-        try:
-            return _cmd_set(tokens, args, db, log_fn)
-        finally:
-            db.close()
-
-    if sub == "del":
-        db = _open_db()
-        try:
-            return _cmd_del(tokens, db, log_fn)
-        finally:
-            db.close()
-
-    if sub == "rule":
-        return _cmd_rule(args, log_fn)
-
-    if sub == "exe":
-        parts   = args.strip().split(None, 1)
-        exe_cmd = parts[1] if len(parts) > 1 else ""
-        if not exe_cmd:
-            _b(log_fn)["err"]("usage: mycelium exe <command> [args...]")
-            return 1
-        return _exe(exe_cmd, log_fn)
-
-    if sub == "update":
-        db = _open_db()
-        try:
-            return _cmd_update(db, log_fn)
-        finally:
-            db.close()
-
-    if sub == "reverse":
-        db = _open_db()
-        try:
-            return _cmd_reverse(tokens, db, log_fn)
-        finally:
-            db.close()
-
+    if sub == "init":      return _with_db(lambda db: _cmd_init(db, log_fn))
+    if sub == "install":   return _with_db(lambda db: _cmd_install(tokens, db, log_fn))
+    if sub == "uninstall": return _with_db(lambda db: _cmd_uninstall(tokens, db, log_fn))
+    if sub == "list":      return _with_db(lambda db: _cmd_list(tokens, db, log_fn))
+    if sub == "set":       return _with_db(lambda db: _cmd_set(tokens, args, db, log_fn))
+    if sub == "del":       return _with_db(lambda db: _cmd_del(tokens, db, log_fn))
+    if sub == "rule":      return _with_db(lambda db: _cmd_rule(args, db, log_fn))
+    if sub == "resolve":   return _with_db(lambda db: _cmd_resolve(tokens, args, db, log_fn))
+    if sub == "update":    return _with_db(lambda db: _cmd_update(db, log_fn))
+    if sub == "reverse":   return _with_db(lambda db: _cmd_reverse(tokens, db, log_fn))
     if sub == "help":
         log_fn(R_ECO3inf()["manual"])
         return 0
@@ -1215,37 +988,31 @@ def R_ECO3(args: str, log_fn=print):
     _b(log_fn)["err"](f"Unknown sub-command: '{sub}' — use 'mycelium help'")
     return 1
 
+
 # ---------------------------------------------------------------------------
 # R_ECO3dep / R_ECO3inf
 # ---------------------------------------------------------------------------
 
 def R_ECO3dep():
-    return (
-        ("3.5.1b",),
-        (
-            ("core.hive", ("1.2",)),
-            ("core.apix",  ("1.1",)),
-            ("core.trail", ("1.1",)),
-            ("core.utils", ("1.1",)),
-            ("spider",     ("1.8",)),
-            ("banana",     ("1.1",)),
-        ),
-    )
+    return {
+        "reco": ["3.5.2b"],
+        "module": [{"banana": ["2.1"]}],
+    }
 
 
 def R_ECO3inf():
     return {
         "name":        "mycelium",
-        "desc":        "3-layer command dispatcher with explicit module registry",
+        "desc":        "3-layer alias/registry manager — résout les commandes, n'exécute rien",
         "help":        (
             "mycelium init | install <stem> | uninstall <stem> | list [kw] | "
-            "set <kw> <v> | del <kw> | rule <cmd> | exe <cmd> | update | reverse <mod>"
+            "set <kw> <v> | del <kw> | rule <cmd> | resolve <cmd> | update | reverse <mod>"
         ),
-        "version_mod": "1.6",
+        "version_mod": "2.0",
         "L2Module":    True,
         "manual": """
-mycelium — R-ECOSYSTEM command dispatcher  v1.6
-===============================================
+mycelium — R-ECOSYSTEM alias / registry manager  v2.0
+=======================================================
 
 SYNOPSIS
     mycelium init
@@ -1255,50 +1022,37 @@ SYNOPSIS
     mycelium set       <keyword> <variants>
     mycelium del       <keyword>
     mycelium rule      <cmd> [args...]
-    mycelium exe       <cmd> [args...]
+    mycelium resolve   <cmd> [args...]
     mycelium update
     mycelium reverse   <module>
     mycelium help
 
-NEW IN v1.6
-    All output now uses banana (Rich panels, ok/err, checkboxes).
-    Falls back to plain log_fn if banana is unavailable.
+PRINCIPES v2.0
+    mycelium ne fait QUE gérer le registre et les règles d'alias.
+    L'exécution appartient à squid.
 
-    mycelium init
-        Scans modules/ for unregistered L2 modules, presents a checkbox
-        list via banana so you can pick which ones to install.
-        After selection, runs `mycelium update` automatically to load
-        their alias rules into Layer 2.
+    db est toujours fourni par le caller (squid/raven) via le payload
+    {args, logfn, db, token}. mycelium ne rouvre jamais la DB sauf
+    en dernier recours (appels directs sans db, ex. tests CLI).
 
-MODULE REGISTRY
-    §sys:mycelium:registry         — user modules (install/uninstall)
-    §sys:mycelium:registry:core    — system modules (auto at boot)
+    Tous les db.get() passent par _dbget() — jamais de as_str=True.
 
-    Core stems: nest raven spider mycelium bee login init moss
-                banana manual help echo crypto vine prism reco_bldr
+CONTRAT apix v2
+    R_ECO3 accepte uniquement un dict : {args, logfn, db?, token?}
 
-THREE-LAYER ROUTING
-    Layer 1 — user (L1)      §sys:mycelium:rules:user:<keyword>
-    Layer 2 — module (L2)    §sys:mycelium:rules:module:<keyword>
-    Layer 3 — default (L3)   implicit: <stem> /* = <stem> / * = <stem> *
+REGISTRE
+    §sys:mycelium:registry         — modules user
+    §sys:mycelium:registry:core    — modules système (auto)
 
-VARIANT FORMAT
-    "/* = rhs"       zero-arg   "* = rhs *"  with-arg + inject
-    Separate with |||
+ROUTAGE 3 COUCHES
+    L1 user    §sys:mycelium:rules:user:<keyword>
+    L2 module  §sys:mycelium:rules:module:<keyword>
+    L3 default implicite : <stem> /* = <stem>  /  * = <stem> *
 
-UPDATE (v1.5+)
-    A) Registry check: missing .py files auto-removed from registry.
-    B) L2 alias sync from alias_rules. Conflicts prompt via banana.
-    User (L1) overrides never touched.
-
-EXAMPLES
-    mycelium init                  → checkbox picker for new modules
-    mycelium install logger        → add logger to user registry
-    mycelium uninstall logger      → remove with confirmation
-    mycelium list                  → registry + routing table (Rich)
-    mycelium list echo             → detail view for one keyword
-    mycelium update                → integrity check + L2 sync
-    mycelium rule vine status      → dry-run resolution
-    mycelium reverse banana        → all rules dispatching to banana
+EXEMPLES
+    mycelium resolve vine status    → retourne "vine status"
+    mycelium rule vine status       → affiche le panel dry-run
+    mycelium list
+    mycelium update
 """,
     }
