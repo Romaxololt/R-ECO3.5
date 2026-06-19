@@ -2,7 +2,7 @@
 # Gestionnaire de fichiers distants via GitHub raw
 # Base URL : https://raw.githubusercontent.com/Romaxololt/R-ECO3.5/main/
 
-_VERSION = "1.3"
+_VERSION = "2.1"
 _BASE_URL = "https://raw.githubusercontent.com/Romaxololt/R-ECO3.5/main/"
 _DB_KEY_PREFIX = "§sys:mule:installed:"
 _DB_KEY_LIST = "§sys:mule:list"
@@ -11,12 +11,6 @@ _SEP = "<MULE_SEP:=:>"
 # ─────────────────────────────────────────────
 # Helpers internes
 # ─────────────────────────────────────────────
-
-def _get_db():
-    import core.trail as trail
-    import core.hive as hive
-    return hive.HiveFS(str(trail.DB_FILE))
-
 
 def _get_installed(db) -> list:
     raw = db.get(_DB_KEY_LIST, as_str=True)
@@ -44,7 +38,7 @@ def _fetch_file(filename: str, log_fn) -> tuple:
     def _capture(msg=""):
         lines.append(str(msg))
 
-    code, _ = apix.R_ECO3(f'run vine {url} --no-status', log_fn=_capture)
+    code, _ = apix.R_ECO3({"args": f'run vine {url} --no-status', "logfn": _capture})
     if code != 0:
         return 1, f"Erreur réseau pour '{filename}'"
 
@@ -114,8 +108,7 @@ def _register(db, installed: list, filename: str):
 # Commandes
 # ─────────────────────────────────────────────
 
-def _cmd_install(filename: str, log_fn) -> tuple:
-    db = _get_db()
+def _cmd_install(filename: str, log_fn, db) -> tuple:
     installed = _get_installed(db)
 
     if filename in installed:
@@ -145,8 +138,7 @@ def _cmd_install(filename: str, log_fn) -> tuple:
     return 0, None
 
 
-def _cmd_uninstall(filename: str, log_fn) -> tuple:
-    db = _get_db()
+def _cmd_uninstall(filename: str, log_fn, db) -> tuple:
     installed = _get_installed(db)
 
     if filename not in installed:
@@ -169,7 +161,7 @@ def _cmd_uninstall(filename: str, log_fn) -> tuple:
     return 0, None
 
 
-def _cmd_update_all(log_fn) -> tuple:
+def _cmd_update_all(log_fn, db) -> tuple:
     """
     mule update * — scanne modules/ et core/, tente une mise à jour depuis le repo
     pour chaque fichier trouvé. Ignore les 404 silencieusement.
@@ -201,7 +193,6 @@ def _cmd_update_all(log_fn) -> tuple:
             err_list.append(fname)
             continue
 
-        db = _get_db()
         inst = _get_installed(db)
         _register(db, inst, fname)
         db.close()
@@ -213,11 +204,10 @@ def _cmd_update_all(log_fn) -> tuple:
     return (1, err_list) if err_list else (0, ok_list)
 
 
-def _cmd_update(target: str, log_fn) -> tuple:
+def _cmd_update(target: str, log_fn, db) -> tuple:
     if target == "*":
-        return _cmd_update_all(log_fn)
+        return _cmd_update_all(log_fn, db)
 
-    db = _get_db()
     installed = _get_installed(db)
     db.close()
 
@@ -242,7 +232,7 @@ def _cmd_update(target: str, log_fn) -> tuple:
 # Interface R-ECO3
 # ─────────────────────────────────────────────
 
-def R_ECO3(args: str, log_fn=print) -> tuple:
+def R_ECO3(inp) -> tuple:
     """
     Point d'entrée principal de mule.
 
@@ -252,6 +242,11 @@ def R_ECO3(args: str, log_fn=print) -> tuple:
         mule update <fichier>
         mule update *
     """
+    
+    args = inp["args"]
+    log_fn = inp["logfn"]
+    db = inp["db"]
+    
     import core.utils as utils
 
     positional, flags = utils.parse_command(args)
@@ -262,19 +257,19 @@ def R_ECO3(args: str, log_fn=print) -> tuple:
         if len(positional) < 2:
             log_fn("[mule] Usage : mule install <fichier>")
             return 1, "argument manquant"
-        return _cmd_install(positional[1], log_fn)
+        return _cmd_install(positional[1], log_fn, db)
 
     elif cmd in ("desinstall", "uninstall"):
         if len(positional) < 2:
             log_fn("[mule] Usage : mule desinstall <fichier>")
             return 1, "argument manquant"
-        return _cmd_uninstall(positional[1], log_fn)
+        return _cmd_uninstall(positional[1], log_fn, db)
 
     elif cmd == "update":
         if len(positional) < 2:
             log_fn("[mule] Usage : mule update <fichier> | mule update *")
             return 1, "argument manquant"
-        return _cmd_update(positional[1], log_fn)
+        return _cmd_update(positional[1], log_fn, db)
 
     elif cmd in ("help", "-h", "--help"):
         log_fn(_HELP_TEXT)
@@ -285,17 +280,13 @@ def R_ECO3(args: str, log_fn=print) -> tuple:
         return 1, f"commande inconnue : {cmd}"
 
 
-def R_ECO3dep() -> tuple:
-    return (
-        ("3.5.1b",),
-        (
-            ("core.utils",  ("1.1",)),
-            ("core.hive", ("1.2",)),
-            ("core.apix",   ("1.1",)),
-            ("core.trail",  ("1.1",)),
-            ("vine",        ("1.1",)),
-        )
-    )
+def R_ECO3dep():
+    return {
+        "reco": ["3.5.1b"],
+        "module": [
+            {"vine": ["2.1"]},
+            ],
+    }
 
 
 def R_ECO3inf() -> dict:
